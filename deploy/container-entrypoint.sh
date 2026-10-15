@@ -6,6 +6,7 @@ if [ ! -s /run/secrets/synplex_access ]; then
   exit 1
 fi
 : "${SYNPLEX_PUBLIC_ORIGIN:?Set the exact external HTTPS origin}"
+mkdir -p /tmp/synplex-nginx
 nginx -t -c /app/deploy/nginx.conf
 node services/workspace/server.mjs &
 app_pid=$!
