@@ -1,0 +1,57 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {WorkspaceService} from '../../services/workspace/service.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import {sha256} from '../../packages/contracts/validate.mjs';
+import * as context from '../../packages/context/index.mjs';
+import {launchTestBrowser,browserEvidenceDirectory} from '../testing/browser.mjs';
+
+const evidence=browserEvidenceDirectory('output-table','SYNPLEX_OUTPUT_TABLE_EVIDENCE');
+const directory=mkdtempSync(join(tmpdir(),'synplex-output-table-')),repository=new WorkspaceRepository({dataDir:directory});
+const scope={projectId:'table-preview-fixture',versionId:null,branchId:null},protocolVersion='synplex.workspace/1.0.0';
+const credential=repository.createCredential({ownerId:'fixture',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory','prepare_task','record_result']});
+const auth=repository.authenticate(credential.token),repo=await repository.forScope(auth,scope),service=new WorkspaceService({repository,modules:{context}});
+const metadata=async()=>({protocolVersion,scope,requestId:randomUUID(),expectedStateRevision:(await repo.getState()).stateRevision});
+const prepared=await service.call(auth,'prepare_task',{...await metadata(),goal:'核对成果里的表格和图',constraints:['不调用模型'],acceptanceCriteria:['原数值、原文件不改变'],mode:'host_assist',executor:'current_host',selectedOccurrenceIds:[],maxInputTokens:4000});
+const text='# 对比说明\n\n项目 | 数量\n--- | ---\n变化一 | -2\n变化二 | 6\n没有变化 | 0\n\n项目 | 说明\n--- | ---\n<img src="https://untrusted.invalid/pixel" onerror="window.untrusted=true"> | 不运行\n<script>window.untrusted=true</script> | 保留原文\n\n```md\n例子 | 数量\n--- | ---\n甲 | 1\n乙 | 2\n```\n';
+const bytes=Buffer.from(text),artifact={id:randomUUID(),name:'对比说明.md',uri:'https://untrusted.invalid/never-fetch',sha256:sha256(bytes),byteLength:bytes.length,mediaType:'text/markdown',verification:'reported'};
+const receipt=await service.call(auth,'record_result',{...await metadata(),runId:prepared.run.id,result:{eventId:randomUUID(),attemptId:randomUUID(),provider:'synthetic-host-fixture',summary:'合成数值，只验证呈现，不是效益数据',artifacts:[artifact],checks:[],usage:{observationScope:'host_unavailable',provider:null,model:null,inputTokens:null,outputTokens:null,cachedInputTokens:null,costUsd:null,pricingRevision:null,provenance:'unknown'},supersedesResultId:null,occurredAt:null}});
+repository.saveArtifactFile(auth,scope,receipt.result.id,artifact,bytes);
+const baseline=repository.read(auth,scope,'result',receipt.result.id),beforeRevision=(await repo.getState()).stateRevision;
+const app=createWorkspaceServer({repository,publicDir:resolve('public')}),url=await app.listen(),browser=await launchTestBrowser();let page;
+try{
+ page=await browser.newPage({viewport:{width:390,height:844}});const errors=[],external=[],mutations=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.addInitScript(()=>{window.policyViolations=[];addEventListener('securitypolicyviolation',event=>window.policyViolations.push(event.violatedDirective));});
+ await page.route('**/*',route=>{const request=route.request();if(new URL(request.url()).origin!==url){external.push(request.url());return route.abort();}if(request.method()==='POST')mutations.push(new URL(request.url()).pathname);return route.continue();});
+ const pairing=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pairing.nonce},maxRedirects:0})).status(),303);
+ await page.goto(url);await page.locator('nav [data-nav=results]').click();await page.locator('[data-action=artifact-preview]').click();
+ const dialog=page.locator('#dialog');await dialog.locator('.output-table').first().waitFor();assert.equal(await dialog.locator('.output-table table').count(),2);
+ assert.equal(await dialog.locator('.output-chart').count(),1);await dialog.locator('[data-ai-action=view_table_chart]').click();
+ assert.deepEqual(await dialog.locator('.output-chart-value').allTextContents(),['-2','6','0']);
+ assert.equal(await dialog.locator('script,img,iframe,a[href]').count(),0);assert.equal(await page.evaluate(()=>window.untrusted),undefined);
+ await dialog.locator('.output-original>summary').click();assert.equal(await dialog.locator('.output-original pre').textContent(),text);
+ await dialog.locator('.output-original>summary').click();
+ await dialog.evaluate(element=>{element.scrollTop=0;});
+ const mobile=await dialog.locator('.output-chart-track').first().boundingBox();
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:join(evidence,'成果表格与图-手机.png'),fullPage:true});
+ await page.setViewportSize({width:1280,height:900});const desktop=await dialog.locator('.output-chart-track').first().boundingBox();assert.ok(desktop.width>mobile.width);
+ const geometry=await dialog.locator('.output-chart li').evaluateAll(rows=>rows.map(row=>{const track=row.querySelector('.output-chart-track').getBoundingClientRect(),bar=row.querySelector('.output-chart-bar').getBoundingClientRect();return {track:track.width,offset:bar.x-track.x,width:bar.width};}));
+ assert.ok(Math.abs(geometry[0].width/geometry[0].track-0.25)<0.01);assert.ok(Math.abs(geometry[1].width/geometry[1].track-0.75)<0.01);assert.equal(geometry[2].width,0);
+ assert.equal(await dialog.locator('.output-chart-bar').first().evaluate(element=>getComputedStyle(element).fill),'rgb(8, 8, 8)');
+ const ambiguous=await page.evaluate(async()=>{const {availableOperations}=await import('/semantic-actions.js');availableOperations();return [...document.querySelectorAll('[data-ai-state=ambiguous]')].map(x=>x.dataset.aiId);});assert.deepEqual(ambiguous,[]);
+ await page.screenshot({path:join(evidence,'成果表格与图-桌面.png'),fullPage:true});
+ await dialog.locator('#close-dialog').click();const downloaded=page.waitForEvent('download');await page.locator('[data-action=artifact-download]').click();
+ const download=await downloaded,file=await download.path();assert.equal(download.suggestedFilename(),artifact.name);assert.deepEqual(readFileSync(file),bytes);
+ assert.deepEqual(repository.read(auth,scope,'result',receipt.result.id),baseline);assert.equal((await repo.getState()).stateRevision,beforeRevision);
+ assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.deepEqual(await page.evaluate(()=>window.policyViolations),[]);
+ const reads=new Set(['/api/v1/ui_history','/api/v1/ui_artifact_preview','/api/v1/artifact_file']);assert.ok(mutations.every(x=>reads.has(x)),JSON.stringify(mutations));
+ writeFileSync(join(evidence,'result.json'),JSON.stringify({status:'passed',actualHttpAndSQLite:true,readOnly:true,originalFileDownloaded:true,originalResultAndStateUnchanged:true,tableCount:2,chartValues:['-2','6','0'],chartTrackWidths:{mobile:mobile.width,desktop:desktop.width},noExecutableMarkup:true,noPolicyViolation:true,noAmbiguousActions:true,observedReadPosts:mutations,modelCalls:0,taskExecutions:0},null,2));
+ console.log('手机/桌面成果表格与数值图、无可执行内容、原文件下载及只读保全通过；模型调用0。');
+}catch(error){writeFileSync(join(evidence,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,modelCalls:0},null,2));if(page)await page.screenshot({path:join(evidence,'failure.png'),fullPage:true}).catch(()=>{});throw error;}
+finally{await browser.close();await app.close();repository.close();rmSync(directory,{recursive:true,force:true});}

@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import {previewSourceFixture} from '../testing/source-preview-fixture.mjs';
+import {launchTestBrowser,browserEvidenceDirectory} from '../testing/browser.mjs';
+const evidence=browserEvidenceDirectory('source-preview','SYNPLEX_SOURCE_PREVIEW_EVIDENCE');
+const directory=mkdtempSync(join(tmpdir(),'synplex-preview-browser-')),repository=new WorkspaceRepository({dataDir:directory}),scope={projectId:'preview-fixture',versionId:null,branchId:null};
+const credential=repository.createCredential({ownerId:'fixture',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory','prepare_task']}),auth=repository.authenticate(credential.token);
+const fixture=await previewSourceFixture(await repository.forScope(auth,scope)),app=createWorkspaceServer({repository,publicDir:resolve('public')}),url=await app.listen(),browser=await launchTestBrowser();
+let page;
+try{
+ page=await browser.newPage({viewport:{width:390,height:844}});const errors=[],external=[],reads=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ await page.route('**/*',route=>{if(new URL(route.request().url()).origin===url)return route.continue();external.push(route.request().url());return route.abort();});
+ page.on('response',async response=>{if(response.url()!==url+'/api/v1/ui_source_preview'||!response.ok())return;const data=response.request().postDataJSON(),body=await response.json();reads.push({summary:data.mode==='summary',responseBytes:Buffer.byteLength(JSON.stringify(body)),bodyBlocks:body.parsed?.blocks.length??0});});
+ const pairing=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pairing.nonce},maxRedirects:0})).status(),303);
+ await page.goto(url);await page.locator('nav [data-nav=materials]').click();await page.locator('[data-action=preview-source]').click();
+ const dialog=page.locator('#dialog');await dialog.locator('#source-preview-content').waitFor();const first=await dialog.locator('#source-preview-content').innerText();
+ assert.match(first,/开头🙂/);assert.equal(await dialog.locator('[data-action=source-preview-previous]').isDisabled(),true);assert.equal(await dialog.locator('[data-action=source-preview-next]').isEnabled(),true);
+ let failure=true;
+ await page.route('**/api/v1/ui_source_preview',route=>{if(failure&&route.request().postDataJSON().cursor){failure=false;return route.abort();}return route.continue();});
+ await dialog.locator('[data-action=source-preview-next]').click();await dialog.locator('#source-preview-error').filter({hasText:'暂时无法继续阅读'}).waitFor();assert.equal(await dialog.locator('#source-preview-content').innerText(),first);
+ await dialog.locator('[data-action=source-preview-next]').click();await dialog.getByRole('status').filter({hasText:'第 2 段'}).waitFor();assert.notEqual(await dialog.locator('#source-preview-content').innerText(),first);
+ await dialog.locator('[data-action=source-preview-previous]').click();await dialog.getByRole('status').filter({hasText:'第 1 段'}).waitFor();assert.equal(await dialog.locator('#source-preview-content').innerText(),first);
+ await page.unroute('**/api/v1/ui_source_preview');
+ let admitted,release;const incoming=new Promise(resolve=>admitted=resolve),resume=new Promise(resolve=>release=resolve);
+ await page.route('**/api/v1/ui_source_preview',async route=>{if(!route.request().postDataJSON().cursor)return route.continue();const response=await route.fetch();admitted();await resume;await route.fulfill({response});});
+ await dialog.locator('[data-action=source-preview-next]').click();await incoming;await dialog.locator('#close-dialog').click();await page.locator('[data-action=ask-material]').click();await dialog.locator('#material-question-form').waitFor();
+ const returned=page.waitForResponse(r=>r.url()===url+'/api/v1/ui_source_preview'&&!!r.request().postDataJSON().cursor);release();await returned;
+ assert.equal(await dialog.locator('#material-question-form').count(),1);assert.equal(await dialog.locator('#source-preview-content').count(),0);
+ assert.ok(reads.some(x=>x.summary&&x.bodyBlocks===0));assert.ok(reads.every(x=>x.responseBytes<100000));
+ const semantics=await page.evaluate(async()=>{const {availableOperations}=await import('/semantic-actions.js');availableOperations();return [...document.querySelectorAll('[data-ai-state=ambiguous]')].map(x=>x.dataset.aiId);});assert.deepEqual(semantics,[]);
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+ await page.screenshot({path:join(evidence,'长资料可提问-手机.png'),fullPage:true});
+ await dialog.locator('#close-dialog').click();await page.locator('[data-action=preview-source]').click();await dialog.locator('#source-preview-content').waitFor();await page.screenshot({path:join(evidence,'分段阅读-手机.png'),fullPage:true});
+ const scoped=await repository.forScope(auth,scope);assert.deepEqual(Buffer.from((await scoped.getBlob(fixture.source.id)).bytes),fixture.bytes);
+ assert.equal(repository.recordCount(auth,scope,'attempt'),0);
+ writeFileSync(join(evidence,'result.json'),JSON.stringify({checks:['actual 390px preview from HTTP and SQLite','bounded page, retry keeps current text, previous returns exact text','late response cannot replace a newly opened question','question reads identity only; original bytes unchanged','unambiguous controls; no overflow, page error or external request'],reads,modelCalls:0,fixtureExecutions:0,sourceBytes:fixture.bytes.length},null,2));
+ console.log('长资料分段阅读、失败重试和提问的手机验收通过；模型调用0。');
+}catch(error){writeFileSync(join(evidence,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,modelCalls:0},null,2));if(page)await page.screenshot({path:join(evidence,'failure.png'),fullPage:true}).catch(()=>{});throw error;}
+finally{await browser.close();await app.close();repository.close();rmSync(directory,{recursive:true,force:true});}

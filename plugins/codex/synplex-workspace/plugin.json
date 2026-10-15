@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "synplex-workspace",
+  "version": "0.2.0",
+  "description": "查看项目进展与出处，带着背景继续工作，把成果和经验留下来。",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/project-continuity/SKILL.md",
+      "interface": {
+        "displayName": "Synplex · 继续项目",
+        "shortDescription": "带上已有进展，把项目接着做完",
+        "developerName": "Synplex",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}

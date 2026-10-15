@@ -1,0 +1,75 @@
+# Web 框架
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Agent 编排
+langgraph
+langgraph-checkpoint-postgres
+langchain
+langchain-openai
+pgvector
+
+# PostgreSQL 异步 ORM
+asyncpg
+sqlalchemy[asyncio]
+psycopg[c]
+
+# Web search fallback
+duckduckgo-search
+
+# Document parsing
+pypdf
+
+# Semantic embeddings
+
+# 数据库迁移
+alembic
+
+# JWT 认证
+pyjwt
+
+# 缓存与会话（redis-py，PyPI 包名为 redis）
+redis
+
+# 异步任务队列
+celery
+
+# 配置管理
+pydantic-settings
+
+# 异步 HTTP 客户端
+httpx
+
+# 环境变量
+python-dotenv
+
+# 用户 API Key 加密（Fernet）
+cryptography
+
+# OpenTelemetry 核心
+opentelemetry-api>=1.28.0
+opentelemetry-sdk>=1.28.0
+opentelemetry-distro>=0.49b0
+opentelemetry-exporter-otlp>=1.28.0
+opentelemetry-exporter-otlp-proto-http>=1.28.0
+
+# 自动埋点
+opentelemetry-instrumentation-fastapi>=0.49b0
+opentelemetry-instrumentation-celery>=0.49b0
+opentelemetry-instrumentation-asyncpg>=0.49b0
+opentelemetry-instrumentation-httpx>=0.49b0
+opentelemetry-instrumentation-redis>=0.49b0
+opentelemetry-instrumentation-system-metrics>=0.49b0
+
+# LangChain/LangGraph 埋点（OpenInference）
+openinference-instrumentation-langchain>=0.1.0
+
+# Prometheus 指标暴露
+prometheus-client>=0.21.0
+
+# Bounded general execution and deterministic artifact rendering
+deepagents==0.7.22
+python-docx==1.2.0
+reportlab==4.4.10
+langchain-mcp-adapters==0.3.2

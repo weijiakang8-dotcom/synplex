@@ -1,104 +1,50 @@
-name: Deploy AgentHub
-
+name: Deploy Synplex
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: Full 40-character commit SHA from main
+        description: Full main commit SHA with successful quality gates
         required: true
         type: string
-
 permissions:
   contents: read
   checks: read
-
 concurrency:
-  group: agenthub-production
+  group: synplex-production
   cancel-in-progress: false
-
 jobs:
   deploy:
-    name: Deploy verified main SHA
     environment: production
     runs-on: [self-hosted, linux, agenthub-production]
-    timeout-minutes: 30
-
+    timeout-minutes: 25
     steps:
-      - name: Validate target and CI
-        id: target
+      - name: Validate main SHA and required quality checks
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ inputs.sha }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          import urllib.request
-
-          repository = os.environ["REPOSITORY"]
-          target = os.environ["TARGET_SHA"]
-          token = os.environ["GH_TOKEN"]
-          if not re.fullmatch(r"[0-9a-f]{40}", target):
-              raise SystemExit("Target must be a full lowercase 40-character SHA")
-
+          python3 - <<'PYCODE'
+          import json,os,re,urllib.request
+          sha=os.environ['TARGET_SHA']; repo=os.environ['REPOSITORY']
+          if not re.fullmatch('[0-9a-f]{40}',sha): raise SystemExit('A full commit SHA is required')
           def api(path):
-              request = urllib.request.Request(
-                  f"https://api.github.com/repos/{repository}/{path}",
-                  headers={
-                      "Accept": "application/vnd.github+json",
-                      "Authorization": f"Bearer {token}",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                  },
-              )
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  return json.load(response)
-
-          main_sha = api("commits/main")["sha"]
-          compare_status = api(f"compare/{target}...{main_sha}")["status"]
-          if target != main_sha and compare_status not in {"ahead", "identical"}:
-              raise SystemExit(f"Target is not in main ancestry: {compare_status}")
-
-          check_runs = api(f"commits/{target}/check-runs?per_page=100")["check_runs"]
-          required = {"backend", "frontend", "e2e", "docker", "benchmark-gate"}
-          conclusions = {}
-          for check in sorted(check_runs, key=lambda item: item.get("completed_at") or ""):
-              if check["name"] in required:
-                  conclusions[check["name"]] = check.get("conclusion")
-          failed = {name: conclusions.get(name, "missing") for name in required if conclusions.get(name) != "success"}
-          if failed:
-              raise SystemExit(f"Required CI checks failed or missing: {failed}")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"target_sha={target}\n")
-          print(f"Validated main ancestry and required CI for {target}")
-          PY
-
-      - name: Read-only runner self-check
+            request=urllib.request.Request('https://api.github.com/repos/'+repo+'/'+path,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+            with urllib.request.urlopen(request,timeout=20) as response: return json.load(response)
+          if api('commits/main')['sha']!=sha: raise SystemExit('Deploy only the reviewed current main commit')
+          checks=api('commits/'+sha+'/check-runs?per_page=100')['check_runs']; latest={}
+          for check in sorted(checks,key=lambda x:x.get('started_at') or ''): latest[check['name']]=check.get('conclusion')
+          required=['check','linux-workspace','container']
+          failed={name:latest.get(name,'missing') for name in required if latest.get(name)!='success'}
+          if failed: raise SystemExit('Required checks: '+str(failed))
+          PYCODE
+      - name: Require the administrator-installed Synplex release entry
         run: |
-          set -euo pipefail
-          echo "user=$(whoami)"
-          echo "host=$(hostname)"
-          id
-          systemctl is-active actions.runner.weijiakang8-dotcom-Agenthub.agenthub-prod-193-112-130-181.service
-          if docker ps >/dev/null 2>&1; then
-            echo "Runner unexpectedly has direct Docker access"
-            exit 1
+          if ! test -x /usr/local/sbin/deploy-synplex; then
+            echo '::error::The server still has the old AgentHub deployment entry. An administrator must install deploy/deploy-synplex and configure HTTPS access before switching. The old site is unchanged.'
+            exit 42
           fi
-          sudo -n -l
-
-      - name: Deploy through controlled wrapper
+      - name: Deploy through the restricted production entry
         env:
-          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
-        run: sudo -n /usr/local/sbin/deploy-agenthub "$TARGET_SHA"
-
-      - name: Verify public production SHA
-        env:
-          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
-        run: |
-          set -euo pipefail
-          curl -fsS --retry 5 --retry-delay 5 https://synplex.xyz/health \
-            | python3 -c 'import json,os,sys; d=json.load(sys.stdin); assert d["status"] == "ok"; assert d["build_sha"] == os.environ["TARGET_SHA"]; assert d["database"] is True; assert d["redis"] is True; assert d["llm"] is True'
-          echo "Production verified at $TARGET_SHA"
+          TARGET_SHA: ${{ inputs.sha }}
+        run: sudo -n /usr/local/sbin/deploy-synplex "$TARGET_SHA"

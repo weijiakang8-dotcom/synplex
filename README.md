@@ -1,237 +1,85 @@
-# AgentHub（对外品牌 Synplex）
-
-> **模型越多，越不会用。AgentHub 是你的动态调度中枢**：接上你所有的模型 API，
-> 发布任务后它分析复杂度、为每一步自动选最便宜的模型；便宜模型失败自动升级强模型，
-> 用最少的 token 完成最复杂的任务；执行全程可观看、可审计、可澄清、可回滚，
-> 最后给你一张省钱账单。
-
-生产站：<https://synplex.xyz>
+<p align="center"><img src="public/logo-mark.png" width="80" alt="Synplex"></p>
+<h1 align="center">Synplex</h1>
+<p align="center"><strong>把模糊问题变成有依据的结构化系统。</strong></p>
+<p align="center">记住为什么这样做，带着依据继续，把项目真正做下去。</p>
+<p align="center"><a href="https://synplex.xyz">网站</a> · <a href="docs/INSTALLATION.md">开始使用</a> · <a href="docs/USER_GUIDE.md">使用指南</a> · <a href="docs/EXTENSIONS.md">连接 Codex / DeepSeek Harness</a> · <a href="https://github.com/weijiakang8-dotcom/Agenthub/issues">反馈</a></p>
 
 ---
 
-## 界面预览
+## 做过的项目，成为下一次的起点
 
-| 首页 | 对话 |
-| --- | --- |
-| <img alt="AgentHub 首页" src="docs/screenshots/homepage.png" width="480"/> | <img alt="AgentHub 对话界面" src="docs/screenshots/conversation.png" width="480"/> |
+隔了一段时间，或者换了一个 AI 工具，最难接上的往往不是代码，而是：**现在做到哪里？为什么换过方案？哪些办法已经失败？接下来要交付什么？**
 
-> 首页截取自生产站首页（未登录状态）；对话截图由真实 Chat 前端组件渲染了一段 Markdown 回答
-> 采集而来，用于展示代码块、列表与引用排版。
+Synplex 把资料、决定、任务和成果放进同一个项目。重要记录有出处，修改有前后版本，AI 开工前拿到明确目标与相关背景，完成后留下可以查看、下载和核对的交付。
 
----
+## 你可以用它做什么
 
-## 架构
+| 你要做的事 | Synplex 帮你完成 |
+|---|---|
+| 换工具继续项目 | 从已确认记录和原文准备完整工作说明，交给当前使用的工具 |
+| 整理零散资料 | 导入文字、文档和会话记录；保留原件，按分类与标签查找 |
+| 记住重要转折 | 回看修改原因、处理经过和当前结论，直接打开对应出处 |
+| 把任务拆清楚 | 明确目标、限制、步骤依赖和验收条件；前一步变化时提醒重新核对 |
+| 执行并交付 | 配置执行工具后，由你明确开始；查看进度、补充回答、确认操作和下载成果 |
+| 修改已有成果 | 保留前版文件与原要求，提出修改，比较版本，再核对是否达到目标 |
+| 看懂用量 | 分开呈现预计费用、执行记录和已知用量；保留失败与返工记录 |
+| 整理项目经历 | 选择已确认记录，预览并导出带来源的项目介绍 |
 
-### 系统总览
+## 两种用法，同一份项目依据
 
-```mermaid
-flowchart TB
-    U["用户 / 桌面客户端 (Tauri)"] -->|"HTTPS"| FE["React + Vite 前端<br/>Tailwind + Radix"]
-    FE -->|"JWT / SSE / REST"| API["FastAPI API 网关<br/>JWT + RBAC + 限流"]
+**网页版**：在自己的电脑运行工作台，管理项目、资料、记录、任务和成果。数据保存在自己选择的资料目录。
 
-    subgraph CT["运行时"]
-        direction TB
-        API --> RT{"Intent 路由"}
-        RT -->|"CHAT / KNOWLEDGE"| CHATRT["Chat Runtime<br/>同步 SSE 流式 + Markdown"]
-        RT -->|"TASK / ACTION"| AGENTRT["Agent Runtime<br/>LangGraph 异步可恢复"]
-    end
+**扩展版**：把项目依据接到 Codex 或 DeepSeek Harness，让熟悉的执行工具继续工作。扩展提供项目状态、查找依据、准备任务、记录结果、提炼经验和查看回执六个工具，不在背后另起一个 Agent。
 
-    AGENTRT --> COMPLEX["复杂度评分<br/>规则 + 历史 + LLM 法官"]
-    COMPLEX --> ROUTE["路由决策引擎<br/>三档策略 × 阈值 × 绩效"]
-    ROUTE --> GATE["Model Gateway<br/>便宜优先 / 失败升级 / 回退"]
-    GATE --> LLM[("DeepSeek / OpenAI 兼容 /<br/>用户自有 API Key")]
+两种用法互相补齐：你可以用工作台梳理项目，再用擅长执行的工具推进，把结果带回项目。
 
-    AGENTRT --> SKILL["Skill 匹配<br/>预设包 + 自成长候选"]
-    AGENTRT --> PLAN["Planner → 计划校验"]
-    PLAN --> APPROVE{"副作用审批<br/>冻结 + 幂等"}
-    APPROVE --> EXEC["执行<br/>预算闸门 + 恰一次"]
-    EXEC --> VERIFY["Verify<br/>fail-closed"]
-    VERIFY --> RESULT[("executions / tool_calls<br/>audit_logs / reasoning")]
+## 快速开始
 
-    LLM -.->|"usage / cost / performance 回写"| OBS[("usage_events /<br/>model_performance")]
-    OBS -.->|"越用越准"| ROUTE
-    OBS -.->|"省钱账单"| SAVE["Savings 账单<br/>基线 vs 实际"]
-    RESULT -.->|"成功样本"| GROWTH["自成长<br/>Skill / Agent 候选"]
-    GROWTH -.->|"采纳制"| SKILL
+需要 **Node.js 26**、npm、Git 和 `lsof`。macOS 是主要验收平台；独立执行引擎另需 Python 3.11、PostgreSQL、Valkey 与模型连接。仅整理资料和接续项目不需要模型密钥。
 
-    subgraph DATA["数据与观测"]
-        PG[("PostgreSQL 16 + pgvector")] --- REDIS[("Redis<br/>broker / 闸门 / 缓存")]
-        ER["Embedding<br/>Ollama nomic-embed"] --- PG
-        OTL["OTel Collector"] --> JAEGER["Jaeger"]
-        OTL --> PROM["Prometheus"] --> GRAFANA["Grafana"]
-    end
-
-    API -.->|"RAG 检索"| PG
-    CHATRT -.->|"SSE"| FE
-```
-
-### 三个动态闭环
-
-```mermaid
-flowchart LR
-    subgraph 闭环一["执行中"]
-        A1["便宜模型先试"] -->|"失败"| A2["升级强模型"]
-        A2 --> A1
-    end
-    subgraph 闭环二["跨任务"]
-        B1["用量 + 成败"] --> B2["模型绩效档案"]
-        B2 --> B1
-    end
-    subgraph 闭环三["跨时间"]
-        C1["使用数据"] --> C2["Skill / Agent 版本候选"]
-        C2 -->|"门禁 + 采纳"| C1
-    end
-```
-
-> 三个闭环的共同底线：**每次变化都有版本、有记录、可回滚**。
-
-### 可靠性层
-
-幂等 claim（副作用恰一次）→ `IN_FLIGHT/UNKNOWN` fail-closed → 审批冻结（T24，运行时 mismatch
-→ 零副作用 → 审计 → abort）→ reconciliation → checkpoint/resume → DLQ → 预算原子闸门。
-
-### 关键不变量
-
-- Intent → Runtime 静态映射；complexity 只影响模型策略；
-- 非法计划 → `plan_invalid`（不静默降级）；
-- 副作用预算超限硬终止，只读超限优雅终止；
-- 所有 LLM 调用经 Model Gateway；所有重试经 `failure.py` 分层。
-
-### 生产工具与能力
-
-真实生产工具（6 个）：`search_web / query_db / search_knowledge / recall_memory /
-recall_executions / send_email`。能力目录：`backend/app/engine/capabilities.py`。
-
-> 明确的边界：`send_sms / create_ticket / refund_order` 等仅存在于 benchmark fixture，
-> 不是生产工具；Prompt Injection 防线仍在设计冻结待评审。
-
----
-
-## 当前真实能力
-
-> 本文档只描述有代码、测试或运行证据的能力。边界详见
-> [ARCHITECTURE.md](ARCHITECTURE.md)、[FEATURES.md](docs/FEATURES.md)、
-> [PROJECT_BOUNDARIES.md](docs/PROJECT_BOUNDARIES.md) 与
-> [DISPATCH_CENTER.md](docs/DISPATCH_CENTER.md)。
-
-### 动态调度中枢（核心，全部闭环）
-
-- **复杂度评分器**：规则信号 + 历史统计 + 可选 LLM 法官三层混合，任务级/步骤级两级评分；
-- **路由策略引擎**：三档策略（省钱/均衡/质量）\* 阈值 \* 模型绩效修正 → 每步决策；
-  升级阶梯（每步 ≤1 次、每任务 ≤4 次）；每次决策落 `routing_decisions` 审计表；
-- **澄清中断**：语义歧义/参数缺失 → 暂停弹选项 → 你选择 → 断点继续（全程留痕）；
-  超限显式失败、零副作用；
-- **Skill 系统**：8 个预设任务包 + 自动匹配 + 自成长（候选需你采纳才生效）；
-- **多 Agent 体系**：自带 6 Agent（调度/规划/执行/验证/澄清/记账）+ 版本化自更新；
-- **省钱账单**：实际成本 vs “全程最强模型”基线 + 逐模型 token 看板；
-- **MCP 插件**：`POST /api/mcp` 把调度中心暴露为 MCP 工具集（JSON-RPC 2.0 over HTTP，
-  Bearer JWT），Claude/Codex 等外部助手可直接调用。
-
-### 可靠交付与观测
-
-- 认证（邮箱验证码注册、登录、刷新、找回、JWT、登录/全局限流、安全响应头）；
-- 多租户：`organization_id` 贯穿业务表；`query_db` 强制注入租户谓词；
-- Chat：SSE 流式 + Markdown 渲染；Agent：Intent → 复杂度 → Planner → LangGraph → Verify；
-- 可靠性：Approval Freeze、幂等、fail-closed、reconciliation、checkpoint/resume、DLQ、预算闸门；
-- 观测：`audit_logs` + `tool_calls` + span 持久化；OTel → Jaeger / Prometheus / Grafana；
-- RAG：文档 → 分块 → Ollama `nomic-embed-text`（768d）→ pgvector → top-k；
-- 记忆：长期记忆显式读写删 + 检索，租户隔离；
-- 成本：模型价格配置 + 每次调用 usage/cost + 租户预算（Redis 原子闸门）。
-
-### 明确的边界（L2 部分 / L1 声明）
-
-- Kernel 确定性内核：代码与单测真实，生产 `RUNTIME_MODE` 未启用；
-- 双供应商回退（OpenAI）：代码存在，开关默认关闭且密钥未充值；
-- RBAC：admin/member/viewer + 路由依赖，细粒度策略证据有限；
-- Workflow/DAG：编辑器与映射存在，执行仍以串行为主。
-
----
-
-## 快速开始（本地）
-
-前置：Python 3.11+、Node.js 20+、Docker Desktop。
-
-```bash
+```sh
 git clone https://github.com/weijiakang8-dotcom/Agenthub.git
 cd Agenthub
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r backend/requirements.txt
-cp .env.example .env          # 填入所需模型和工具凭据
-docker compose -f docker/docker-compose.yml up -d postgres redis mailhog embedding
-cd backend
-python -m alembic upgrade head
-python -m uvicorn app.main:app --port 8000
+npm ci --ignore-scripts
+npm run open:workspace
 ```
 
-另开终端启动 worker：
+在 Mac 也可以双击项目内的 **打开Synplex.command**。初次使用新资料目录，不会导入作者的私人数据或复制任何密钥。入口和详细依赖说明见[安装指南](docs/INSTALLATION.md)。
 
-```bash
-cd Agenthub && . .venv/bin/activate && cd backend
-python -m celery -A app.engine.tasks.celery_app worker --loglevel=warning --pool=solo
+## 为什么值得把项目留在这里
+
+- **依据跟得上结论**：原件、引用、人工确认和修改历史分开保存。
+- **人保留决定权**：候选记录不自动成为事实；执行、具体操作和成果验收各有明确边界。
+- **遇到中断先核对**：保留原提交身份和回执，不用重新执行冒充恢复。
+- **能带走，也能回看**：原件与成果可下载，记录可比较，项目介绍可离线导出。
+- **困难留在系统里**：界面使用“项目、任务、资料、记录、成果”等短名称，解释放在需要的时候。
+
+## 面向开发者
+
+```sh
+npm run check                 # 静态结构、接口契约、真实 SQLite/HTTP 与故障回归
+npm run test:browser:core      # 核心浏览器流程，使用确定性执行夹具
+npm run build:release -- /absolute/path/to/new-release --engine-source vendor/agenthub/backend
 ```
 
-另开终端启动前端：
+测试默认阻止模型网络调用。浏览器测试需要安装 Chrome，CI 使用锁定的 Chromium。质量检查证明其覆盖范围内的软件行为；不把测试条数换算成真实任务成功率。
 
-```bash
-cd Agenthub/frontend && npm ci && npm run dev   # http://localhost:5173
-```
+| 文档 | 内容 |
+|---|---|
+| [安装与配置](docs/INSTALLATION.md) | 环境、启动、资料目录与自有执行引擎 |
+| [使用指南](docs/USER_GUIDE.md) | 从第一个项目到交付、修订与复盘 |
+| [扩展接入](docs/EXTENSIONS.md) | Codex / DeepSeek Harness 的打包与连接 |
+| [架构](docs/ARCHITECTURE.md) | 数据、状态、执行和权限边界 |
+| [接口](docs/API.md) | 契约、认证、主要入口与错误处理 |
+| [开发与测试](docs/DEVELOPMENT.md) | 目录结构、质量门禁和复现验证 |
+| [部署](docs/DEPLOYMENT.md) | 容器、反向代理、备份和回退 |
+| [维护](docs/OPERATIONS.md) | 详细运行、恢复与升级参考 |
+| [当前使用范围](docs/LIMITATIONS.md) | 平台、宿主兼容性和恢复边界 |
 
-登录后：左侧「调度中心」先分析任务 →「新建对话」发布 → 执行全程直播 →「省钱账单」看账。
+## 参与改进
 
-## macOS 桌面客户端
+遇到问题，请通过 [Issues](https://github.com/weijiakang8-dotcom/Agenthub/issues) 提供操作步骤、预期与实际结果、运行版本及脱敏后的问题编号。欢迎围绕真实任务提交反馈和改进，详见 [贡献指南](CONTRIBUTING.md)。
 
-桌面客户端采用 Tauri v2，完整复用 React 前端并直接连接 `https://synplex.xyz/api`，
-本机无需 Docker：
+## 开源与致谢
 
-```bash
-cd frontend
-npm run desktop:dev     # 开发
-npm run desktop:build   # 生成 .app + .dmg
-```
-
-详见 [docs/DESKTOP_CLIENT.md](docs/DESKTOP_CLIENT.md)。
-
-## 技术栈
-
-- 后端：Python 3.11 / FastAPI / SQLAlchemy(asyncpg) / LangGraph / Celery / Redis；
-- 数据：PostgreSQL 16 + pgvector；Embedding：Ollama `nomic-embed-text`；
-- 模型：DeepSeek（OpenAI 兼容端点）+ 用户自有 API Key；Model Gateway 统一路由/重试/回退/成本；
-- 前端：React + Vite + TypeScript + Tailwind + Radix（深色/浅色双主题）；
-- 部署：Docker Compose（backend/worker/frontend/postgres/redis/mailhog/embedding + 监控栈）。
-
-## 测试
-
-```bash
-cd backend && python -m pytest -q                    # 103 个测试文件，689 用例通过
-cd ../frontend
-npm ci && npm run typecheck && npm run test:run && npm run lint && npm run build
-npm run test:e2e                                     # 需要本地后端已启动
-```
-
-Benchmark（真实模型，需显式开启）：
-
-```bash
-cd backend
-BENCH_REAL_MODELS=1 python -m tests.benchmark.phase1.run_1a
-BENCH_REAL_MODELS=1 PHASE1B_MODE=full python -m tests.benchmark.phase1.run_1b
-```
-
-> 数字以 `python -m pytest -q` 实际输出为准；本 README 以最近一次全量成功为基准：
-> `689 passed, 21 skipped`。
-
-## 生产部署
-
-- 生产站：https://synplex.xyz（腾讯云 Ubuntu，Docker Compose）；
-- 部署/回滚：`deploy/production-deploy.sh`（fetch+reset → 构建 → 健康门禁 → 失败自动回滚）；
-  `deploy/rollback.sh`（回上一稳定 commit）；
-- 备份/恢复：`scripts/backup.sh`（pg_dump + gzip，保留 7 份）、`scripts/restore.sh`；
-- GitHub Actions：`ci.yml`（测试/迁移/Playwright + lint/format 门禁）、`benchmark-gate`、
-  `deploy.yml`（显式 SHA + 生产 Environment 审批 + 健康验证）、`desktop.yml`（macOS 打包）；
-- 生产部署必须在**正式环境审批**下进行：校验目标在 main 祖先链 + 所需 CI 全绿 +
-  runner 无 Docker 直连 + health/build_sha 验证通过。
-
-## License
-
-[Apache License 2.0](LICENSE)
+采用 [Apache-2.0](LICENSE) 许可证。融合工作台承接 AgentHub 的执行能力与 Weave 的项目记录思想；引擎源码随 `vendor/agenthub` 保留原许可证。第三方依赖和用途见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -1,0 +1,77 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {resolve,join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import {importSource} from '../../packages/ingestion/index.mjs';
+import {sha256} from '../../packages/contracts/validate.mjs';
+const {chromium}=await import(pathToFileURL(resolve(process.env.SYNPLEX_BROWSER_DRIVER)).href);
+const evidence=resolve(process.env.SYNPLEX_EXPRESSION_EVIDENCE_DIR??'.runtime/implementation-baseline/project-expression-browser-r1');
+mkdirSync(evidence,{mode:0o700});
+const directory=mkdtempSync(join(tmpdir(),'synplex-expression-ui-')),scope={projectId:'expression-ui',versionId:null,branchId:null};
+const repository=new WorkspaceRepository({dataDir:directory}),credential=repository.createCredential({ownerId:'fixture',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory']});
+const auth=repository.authenticate(credential.token),repo=await repository.forScope(auth,scope),claims=[];
+const meta=async()=>({requestId:crypto.randomUUID(),expectedStateRevision:(await repo.getState()).stateRevision});
+for(const [index,text] of ['决定：保留原件，不让摘要替代原文。','经验：未选中的PRIVATE_NOT_SELECTED，不应出现在介绍里。'].entries()){
+ await importSource(repo,{bytes:Buffer.from(text),format:'text/plain',sourceSystem:'isolated-test',formatVersion:'1',sessionId:null,eventId:'expression-'+index,occurredAt:null,importOrigin:'isolated_test'},await meta());
+ const claim=(await repo.getState()).pending[0],request={protocolVersion:'synplex.workspace/1.0.0',scope,...await meta(),claimId:claim.id,reviewStatus:'confirmed'};
+ const grant=repository.issueReviewAuthorization(auth,request);claims.push(repository.review(auth,{...request,authorizationId:grant.authorizationId}).value);
+}
+const app=createWorkspaceServer({repository,publicDir:resolve('public')}),url=await app.listen();
+const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--disable-background-networking']});
+let failurePage;
+try{
+ const context=await browser.newContext({viewport:{width:390,height:844},acceptDownloads:true}),page=await context.newPage(),errors=[],external=[];
+ failurePage=page;
+ await page.addInitScript(()=>Object.defineProperty(globalThis,'showSaveFilePicker',{value:undefined,configurable:true})); // Explicitly exercise the browser-download fallback, not a native dialog.
+ context.on('page',p=>p.on('pageerror',e=>errors.push(e.message)));page.on('pageerror',e=>errors.push(e.message));
+ await context.route('**/*',route=>{const target=new URL(route.request().url());if(target.origin===url||target.protocol==='file:')return route.continue();external.push(target.href);return route.abort();});
+ const pairing=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pairing.nonce},maxRedirects:0})).status(),303);
+ await page.goto(url);await page.locator('[data-action=project-expression]').click();
+ const form=page.locator('#project-expression-form');assert.equal(await form.locator('input:checked').count(),0);
+ await form.locator(`[name=claim][value="${claims[0].id}"]`).check();await form.locator('[name=title]').fill('我的项目 <script>globalThis.expressionExecuted=true</script>');
+ await page.locator('[data-action=preview-project-file]').click();await page.locator('[data-ai-role=project_expression_preview]').waitFor();
+ assert.match(await page.locator('[data-ai-role=project_expression_preview]').innerText(),/保留原件/);assert.doesNotMatch(await page.locator('[data-ai-role=project_expression_preview]').innerText(),/PRIVATE_NOT_SELECTED/);
+ assert.equal(await page.locator('[data-ai-role=project_expression_preview] blockquote').count(),0);
+ assert.match(await page.locator('dialog .notice').innerText(),/不附原文/);
+ assert.ok(await page.locator('[data-ai-role=project_expression_preview] h1').evaluate(e=>e.scrollWidth<=e.clientWidth),'完整预览的长标题应换行，不得在弹窗内裁切');
+ const receive=page.waitForEvent('download');await page.locator('[data-action=save-project-file]').click();const download=await receive;
+ assert.match(download.suggestedFilename(),/\.html$/);const bytes=readFileSync(await download.path());assert.doesNotMatch(bytes.toString(),/PRIVATE_NOT_SELECTED|<script>/);
+ const exported=join(directory,'project.html');writeFileSync(exported,bytes,{mode:0o600});const standalone=await context.newPage();await standalone.goto(pathToFileURL(exported).href);
+ assert.equal(await standalone.locator('script').count(),0);assert.match(await standalone.locator('main').innerText(),/我的项目 <script>/);
+ assert.equal(await standalone.evaluate(()=>globalThis.expressionExecuted),undefined);assert.equal(await standalone.locator('body').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(248, 247, 243)');
+ assert.ok(await standalone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await standalone.screenshot({path:join(evidence,'离线项目介绍-手机.png'),fullPage:true});await standalone.close();
+ const sourceId=claims[0].evidence[0].sourceId,metadata=repository.sourceMetadata(auth,scope,sourceId);
+ repository.updateSourceMetadata(auth,{protocolVersion:'synplex.workspace/1.0.0',scope,...await meta(),sourceId,expectedMetadataRevision:metadata.revision,metadata:{title:'原文名称更正',category:'项目',tags:[],locked:true}});
+ let downloadedAgain=false;page.once('download',()=>{downloadedAgain=true;});await page.locator('[data-action=save-project-file]').click();
+ await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('重新预览'));assert.equal(downloadedAgain,false);
+ await page.locator('[data-action=edit-project-file]').click();assert.equal(await form.locator(`[name=claim][value="${claims[0].id}"]`).isChecked(),true);await form.locator('[name=includeEvidence]').check();
+ await page.locator('[data-action=preview-project-file]').click();await page.locator('[data-ai-role=project_expression_preview] details').waitFor();
+ assert.match(await page.locator('dialog .notice').innerText(),/记录及其原文引用/);
+ assert.ok(await page.locator('[data-ai-role=project_expression_preview] h1').evaluate(e=>e.scrollWidth<=e.clientWidth));
+ await page.screenshot({path:join(evidence,'项目介绍预览-手机.png'),fullPage:true});assert.equal(await page.evaluate(()=>globalThis.expressionExecuted),undefined);
+ const approve=page.locator('[data-action=approve-project-expression]');assert.equal(await approve.isDisabled(),true);
+ await page.locator('#expression-approved').check();assert.equal(await approve.isEnabled(),true);await approve.click();
+ await page.locator('[data-action=create-expression-link]').waitFor();assert.equal(repository.recordCount(auth,scope,'project_expression_version'),1);
+ await page.locator('[data-action=create-expression-link]').click();const open=page.locator('[data-ai-action=open_project_view]');await open.waitFor();
+ const linkOperation=await page.evaluate(async()=>{const {availableOperations}=await import('/semantic-actions.js');return availableOperations().find(x=>x.action==='open_project_view');});
+ assert.ok(linkOperation?.id);assert.equal(typeof linkOperation.entityId,'string');assert.doesNotMatch(linkOperation.id,/\/view\//);
+ const popupEvent=page.waitForEvent('popup');await open.click();const linked=await popupEvent;await linked.waitForLoadState();
+ assert.match(await linked.locator('main').innerText(),/作者确认的版本/);assert.doesNotMatch(await linked.locator('main').innerText(),/PRIVATE_NOT_SELECTED/);assert.equal(await linked.locator('script').count(),0);
+ assert.ok(await linked.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await linked.screenshot({path:join(evidence,'作者确认版本-本机查看.png'),fullPage:true});
+ await page.locator('[data-action=stop-expression-link]').click();await page.locator('dialog .notice').filter({hasText:'已停止查看'}).waitFor();
+ assert.equal(await page.locator('[data-action=create-expression-link]').count(),0);const stopped=await linked.reload();assert.equal(stopped.status(),410);assert.doesNotMatch(await linked.locator('body').innerText(),/我的项目|保留原件/);await linked.close();
+ await page.locator('[data-action=expression-versions]').click();await page.locator('[data-action=view-expression-version]').click();await page.locator('[data-ai-role=project_expression_preview]').waitFor();
+ assert.match(await page.locator('[data-ai-role=project_expression_preview]').innerText(),/保留原件/);await page.screenshot({path:join(evidence,'停止查看后保留作者历史-手机.png'),fullPage:true});
+ const ambiguous=await page.evaluate(async()=>{const {annotateActions}=await import('/semantic-actions.js');annotateActions();return [...document.querySelectorAll('[data-ai-state=ambiguous]')].map(x=>x.dataset.aiId);});assert.deepEqual(ambiguous,[]);
+ assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ assert.equal(repository.list(auth,scope,'attempt').length,0);assert.equal(repository.list(auth,scope,'claim').length,2);
+ writeFileSync(join(evidence,'result.json'),JSON.stringify({checks:['mobile select one confirmed record, none selected by default','private source quotes opt-in, unselected note omitted','real authenticated same-byte HTML download','offline HTML styled under its hashed CSP; source scripts never run','changed source rejects saving stale preview','reselection preserves choice and quotes are explicit','explicit approval saves one immutable version','loopback-only link opens approved snapshot','withdrawal returns 410 on reload without leaking title; author history survives','no attempts, external requests, ambiguous controls, page errors or overflow'],artifactSha256:sha256(bytes),modelCalls:0,publicPublishingVerified:false,realSystemSaveDialogVerified:false},null,2));
+ console.log('项目介绍真实页面与离线文件通过，模型调用0。');
+}catch(error){
+ writeFileSync(join(evidence,'failure.json'),JSON.stringify({message:error.message,claims:repository.list(auth,scope,'claim').length,attempts:repository.list(auth,scope,'attempt').length,modelCalls:0},null,2));
+ if(failurePage)await failurePage.screenshot({path:join(evidence,'failure.png'),fullPage:true}).catch(()=>{});
+ throw error;
+}finally{await browser.close();await app.close();repository.close();rmSync(directory,{recursive:true,force:true});}

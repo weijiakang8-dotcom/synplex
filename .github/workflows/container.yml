@@ -1,0 +1,31 @@
+name: Container quality
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  linux-workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.11.0'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Linux workspace and HTTP boundaries
+        run: node --import ./scripts/testing/offline.mjs --test test/execution/workspace-startup.test.mjs test/execution/public-access.test.mjs test/execution/workspace-service.test.mjs
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.11.0'
+      - name: Build reproducible workspace image
+        run: docker build -f deploy/Dockerfile -t synplex:ci .
+      - name: Protected container, pairing and exact original roundtrip
+        run: bash scripts/integration/container-check.sh

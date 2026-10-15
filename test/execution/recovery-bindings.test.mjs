@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
+import {spawnSync} from 'node:child_process';
+import {resolve} from 'node:path';
+import {seedRecoveryWorkspace} from '../../scripts/testing/recovery-fixture.mjs';
+import {snapshotWorkspace,restoreWorkspace,inspectDatabase} from '../../scripts/runtime/recovery.mjs';
+import {inspectRestoredBindings} from '../../scripts/runtime/recovery-bindings.mjs';
+import {payloadHash} from '../../packages/contracts/validate.mjs';
+
+test('恢复核对只读原绑定；其他连接、无编号、日志冲突、启用和资料变化不能伪装原任务',async t=>{
+ const dir=realpathSync(mkdtempSync(join(tmpdir(),'synplex-reconcile-')));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const engine=join(dir,'engine'),workspace=join(dir,'workspace'),snapshot=join(dir,'snapshot'),restored=join(dir,'restored');
+ mkdirSync(engine,{mode:0o700});const bootstrap=join(engine,'bootstrap.json'),data={workflow_id:randomUUID(),api_port:5412};
+ writeFileSync(bootstrap,JSON.stringify(data),{mode:0o600});
+ const ids=seedRecoveryWorkspace(workspace,engine,data,{completed:randomUUID(),pending:randomUUID(),unidentified:null,foreign:randomUUID()});
+ await snapshotWorkspace(workspace,snapshot);restoreWorkspace(snapshot,restored,{port:5413});
+ const before=inspectDatabase(join(restored,'workspace.sqlite')),inspect=()=>inspectRestoredBindings(snapshot,restored,engine,bootstrap);
+ const report=inspect();assert.equal(report.bindingsChanged,false);assert.equal(report.executorsEnabled,false);
+ const state=name=>report.bindings.find(b=>b.operationId===ids[name].operationId).state;
+ assert.equal(state('completed'),'ready_to_inspect');assert.equal(state('pending'),'ready_to_inspect');assert.equal(state('unidentified'),'ready_to_find_original');assert.equal(state('foreign'),'other_connection');
+ const journal=join(restored,'executors/agenthub',ids.completed.operationId+'.json'),original=readFileSync(journal);
+ writeFileSync(journal,JSON.stringify({...ids.completed,taskId:randomUUID()}));
+ assert.equal(inspect().bindings.find(b=>b.operationId===ids.completed.operationId).state,'journal_mismatch');writeFileSync(journal,original);
+ const setting=join(restored,'executors.before-recovery.json'),saved=readFileSync(setting);
+ writeFileSync(setting,JSON.stringify({synplex:{endpoint:'http://127.0.0.1:5999'}}));assert.throws(inspect,/执行设置不同/);writeFileSync(setting,saved);
+ const enabled=join(restored,'executors.json');writeFileSync(enabled,saved,{mode:0o600});assert.throws(inspect,/尚未启用/);rmSync(enabled);
+ assert.deepEqual(inspectDatabase(join(restored,'workspace.sqlite')),before);
+ assert.deepEqual(inspect(),report);assert.ok(!JSON.stringify(report).includes('fixture-owner'));
+ const db=new DatabaseSync(join(restored,'workspace.sqlite'));
+ try{const row=db.prepare("SELECT * FROM records WHERE kind='context' LIMIT 1").get(),body=JSON.parse(row.body_json);body.goal='快照后新增修改';
+  db.prepare('UPDATE records SET payload_hash=?,body_json=? WHERE partition=? AND kind=? AND id=?').run(payloadHash(body),JSON.stringify(body),row.partition,row.kind,row.id);
+ }finally{db.close();}
+ assert.throws(inspect,/数据已有变化/);
+ const python=spawnSync('/usr/bin/python3',['-I','-B',resolve('test/execution/recovery-reconcile-guards.py'),resolve('integrations/agenthub')],{encoding:'utf8',timeout:10000});
+ assert.equal(python.status,0,python.stderr);assert.match(python.stdout,/modelCalls=0/);
+});

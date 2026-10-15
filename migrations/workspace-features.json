@@ -1,0 +1,4 @@
+{
+  "format": "synplex.workspace-features/1",
+  "features": ["task-followup/1", "task-result-selection/1", "operation-approval/1", "project-expression-version/1", "idle-product-handoff/1"]
+}

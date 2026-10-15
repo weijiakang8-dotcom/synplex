@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WorkspaceRepository } from '../../services/workspace/repository.mjs';
+import { createWorkspaceServer } from '../../services/workspace/http.mjs';
+import * as ingestion from '../../packages/ingestion/index.mjs';
+import * as context from '../../packages/context/index.mjs';
+import * as experience from '../../packages/experience/index.mjs';
+const scope={projectId:'ui-fixture',versionId:'v2',branchId:null};
+
+test('private single-use launcher opens an HttpOnly local session; Origin, scope and revocation stay enforced',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'synplex-ui-session-')),repository=new WorkspaceRepository({dataDir:dir});
+ const ui=repository.createCredential({ownerId:'owner',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','prepare_task','review_memory','record_result']});
+ const auth=repository.authenticate(ui.token),app=createWorkspaceServer({repository,modules:{ingestion,context,experience},publicDir:fileURLToPath(new URL('../../public',import.meta.url))});
+ const url=await app.listen();t.after(async()=>{await app.close();repository.close();rmSync(dir,{recursive:true,force:true});});
+ assert.equal((await fetch(`${url}/`)).status,200);assert.equal((await fetch(`${url}/app.js`)).status,200);
+ assert.equal((await fetch(`${url}/api/v1/ui_bootstrap`)).status,403);
+ const pairing=await app.createUiPairing(auth,scope),body=new URLSearchParams({pair:pairing.nonce});
+ const pair=origin=>fetch(`${url}/api/v1/ui_pair`,{method:'POST',headers:{Origin:origin},body,redirect:'manual'});
+ assert.equal((await pair('https://malicious.example')).status,403);
+ const response=await pair('null');assert.equal(response.status,303);assert.equal(response.headers.get('location'),'/');
+ const setCookie=response.headers.get('set-cookie');assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/SameSite=Strict/);
+ assert.equal(setCookie.includes(ui.token),false);const cookie=setCookie.split(';')[0];
+ assert.equal((await pair('null')).status,403);
+ const info=await fetch(`${url}/api/v1/ui_bootstrap`,{headers:{Cookie:cookie}});assert.equal(info.status,200);
+ const bootstrap=await info.json();assert.deepEqual(bootstrap.scope,scope);assert.equal(bootstrap.capabilities.context,true);
+ const input={protocolVersion:'synplex.workspace/1.0.0',scope};
+ const post=(route,input,origin)=>fetch(`${url}/api/v1/${route}`,{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json',...(origin?{Origin:origin}:{})},body:JSON.stringify(input)});
+ assert.equal((await post('ui_history',input)).status,200);
+ assert.equal((await post('ui_history',input,'https://malicious.example')).status,403);
+ assert.equal((await post('ui_history',{...input,scope:{...scope,versionId:null}})).status,403);
+ assert.equal((await post('ui_history',{...input,actorId:'admin'})).status,403);
+ repository.revokeCredential(ui.id);assert.equal((await fetch(`${url}/api/v1/ui_bootstrap`,{headers:{Cookie:cookie}})).status,403);
+});

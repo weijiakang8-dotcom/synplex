@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {ExecutionCoordinator} from '../../services/workspace/execution.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import {sha256} from '../../packages/contracts/validate.mjs';
+import * as context from '../../packages/context/index.mjs';
+const {chromium}=await import(pathToFileURL(resolve(process.env.SYNPLEX_BROWSER_DRIVER)).href);
+const output=resolve(process.env.SYNPLEX_FOLLOWUP_EVIDENCE_DIR??'.runtime/implementation-baseline/task-followup-browser-r1');mkdirSync(output,{mode:0o700});
+const directory=mkdtempSync(join(tmpdir(),'synplex-followup-ui-')),repository=new WorkspaceRepository({dataDir:directory}),scope={projectId:'followup-ui',versionId:null,branchId:null};
+const credential=repository.createCredential({ownerId:'fixture',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory','prepare_task','record_result','execute']}),auth=repository.authenticate(credential.token);
+let calls=0;const raw=Buffer.from('第一轮原始文件\n<script>globalThis.followupExecuted=true</script>');
+const adapter={mode:'delegated',fileInputs:true,async execute(input){
+ calls++;if(calls===2){assert.equal(input.packet.taskInputs[0].role,'conversation');assert.equal(sha256(input.inputFiles[0].bytes),sha256(raw));assert.match(input.packet.goal,/这份报告依据什么/);}
+ const bytes=calls===1?raw:Buffer.from('第二轮补充解释，不改写第一轮文件。');
+ return {status:'succeeded',result:{eventId:input.operationId,attemptId:input.attemptId,provider:'fixture',summary:calls===1?'测试报告完成。<script>globalThis.followupExecuted=true</script>':'说明已完成，未修改原报告。',artifacts:[{id:'report',name:'报告.md',uri:'synplex-artifact:report',sha256:sha256(bytes),byteLength:bytes.length,mediaType:'text/markdown',verification:'reported'}],checks:[],usage:{observationScope:'host_unavailable',provider:null,model:null,inputTokens:null,outputTokens:null,cachedInputTokens:null,costUsd:null,pricingRevision:null,provenance:'unknown'},supersedesResultId:null,occurredAt:null},files:[{artifactId:'report',bytes}]};
+}};
+const execution=new ExecutionCoordinator({repository,adapters:{codex:adapter}}),app=createWorkspaceServer({repository,modules:{context},execution,publicDir:resolve('public')}),url=await app.listen();
+const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--disable-background-networking']});
+try{
+ const page=await browser.newPage({viewport:{width:390,height:844}}),errors=[],external=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.route('**/*',route=>{if(new URL(route.request().url()).origin===url)return route.continue();external.push(route.request().url());return route.abort();});
+ const pair=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0})).status(),303);
+ await page.goto(url);const nav=id=>page.locator(`nav [data-nav="${id}"]`).click();await nav('task');
+ const taskForm=page.locator('#task-form');await taskForm.locator('[name=goal]').fill('整理一份项目报告');await taskForm.locator('[name=constraints]').fill('不访问其他项目');await taskForm.locator('[name=acceptance]').fill('交付可下载的文件');await taskForm.locator('[name=executor]').selectOption('codex');
+ await page.route(url+'/api/v1/prepare_task',async route=>{await route.fetch();await route.abort('failed');});await taskForm.locator('button[type=submit],button.primary').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('不要重复提交'));
+ assert.equal(repository.list(auth,scope,'run').length,1);assert.equal(calls,0);const original=repository.list(auth,scope,'run')[0];
+ await page.reload();await page.locator('[data-ai-role=task_preparation_recovery]').waitFor();assert.equal(await taskForm.locator('button.primary').innerText(),'核对上次准备');
+ await taskForm.locator('[name=goal]').fill('后来编辑的新任务草稿，不应误当作上次提交');await taskForm.locator('[name=acceptance]').fill('');
+ await page.unroute(url+'/api/v1/prepare_task');await taskForm.locator('button.primary').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('原任务说明已核对'));
+ assert.equal(repository.list(auth,scope,'run').length,1);assert.equal(calls,0);assert.equal(await taskForm.locator('[name=goal]').inputValue(),'后来编辑的新任务草稿，不应误当作上次提交');assert.equal(await taskForm.locator('[name=acceptance]').inputValue(),'');
+ assert.match(await page.locator('.prepared h2').innerText(),/整理一份项目报告/);assert.equal(repository.list(auth,scope,'run')[0].id,original.id);
+ await page.locator('[data-action=start-execution]').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('任务已交给'));await execution.idle();assert.equal(calls,1);
+ const first=repository.list(auth,scope,'result')[0];await nav('results');await page.locator('[data-action=refresh]').click();
+ const form=page.locator(`.result-followup-form[data-result="${first.id}"]`);await form.locator('..').evaluate(e=>e.open=true);await form.locator('[name=question]').fill('这份报告依据什么？不要改写原文件。');
+ await nav('history');await nav('results');assert.equal(await form.locator('[name=question]').inputValue(),'这份报告依据什么？不要改写原文件。');
+ await page.route(url+'/api/v1/ui_prepare_followup',async route=>{await route.fetch();await route.abort('failed');});await form.locator('button').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('不要重复提交'));
+ assert.equal(repository.list(auth,scope,'task_followup').length,1);assert.equal(calls,1);
+ await page.unroute(url+'/api/v1/ui_prepare_followup');await form.locator('button').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('追问已准备好'));
+ assert.equal(repository.list(auth,scope,'task_followup').length,1);assert.equal(calls,1);assert.match(await page.locator('.prepared h2').innerText(),/这份报告依据什么/);
+ await page.locator('[data-ai-role=task_conversation]').evaluate(e=>e.open=true);assert.match(await page.locator('[data-ai-role=task_conversation]').innerText(),/整理一份项目报告/);assert.match(await page.locator('[data-ai-role=task_conversation]').innerText(),/测试报告完成/);assert.equal(await page.evaluate(()=>globalThis.followupExecuted),undefined);
+ await page.locator('[data-action=start-execution]').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('任务已交给'));await execution.idle();assert.equal(calls,2);
+ await nav('results');await page.locator('[data-action=refresh]').click();const second=repository.list(auth,scope,'result').at(-1),next=page.locator(`.result-followup-form[data-result="${second.id}"]`);
+ await next.locator('..').evaluate(e=>e.open=true);await next.locator('[name=question]').fill('刚才哪些信息仍然需要我确认？');await next.locator('button').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('追问已准备好'));
+ assert.equal(calls,2);await page.reload();await page.locator('.prepared').waitFor();assert.match(await page.locator('.prepared h2').innerText(),/哪些信息仍然需要我确认/);
+ await page.locator('[data-ai-role=task_conversation]').evaluate(e=>e.open=true);assert.equal(await page.locator('[data-ai-role=task_conversation] article').count(),2);
+ assert.equal(repository.resultVersions(auth,scope,second.id).versionCount,1);assert.equal(repository.usageLedger(auth,scope).rows.length,2);assert.equal(sha256(repository.artifactFile(auth,scope,first.id,'report').bytes),sha256(raw));
+ const ambiguous=await page.evaluate(async()=>{const {annotateActions}=await import('/semantic-actions.js');annotateActions();return [...document.querySelectorAll('[data-ai-state=ambiguous]')].map(x=>x.dataset.aiId);});assert.deepEqual(ambiguous,[]);
+ assert.equal(await page.evaluate(()=>globalThis.followupExecuted),undefined);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:join(output,'任务连续提问-手机.png'),fullPage:true});writeFileSync(join(output,'result.json'),JSON.stringify({checks:['initial preparation response lost after commit: reload recovers same run and preserves later edited draft without execution','mobile followup question draft survives navigation','response lost after durable prepare: same request reused and no duplicate turn','prepare never executes; explicit start passes original files and question','prior questions and answers visible as escaped references','next question and two prior turns survive full page reload','no false revision lineage or overwrite','each executed turn has separate usage row','no ambiguous actions page error overflow or external request'],fixtureExecutions:calls,modelCalls:0,realModelConversationVerified:false,streamingVerified:false},null,2));console.log('任务追问页面闭环通过，收费模型调用0。');
+}finally{await browser.close();await execution.close();await app.close();repository.close();rmSync(directory,{recursive:true,force:true});}

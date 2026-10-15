@@ -1,0 +1,45 @@
+{
+  "name": "synplex-workspace",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "check:static": "node scripts/check.mjs --static-only",
+    "check:assets": "node scripts/check.mjs --assets --assets-only",
+    "start": "npm run open:workspace",
+    "test": "node --test",
+    "test:contracts": "node --test test/contracts/*.test.mjs",
+    "start:workspace": "node services/workspace/server.mjs",
+    "connect:workspace": "node services/workspace/connect.mjs",
+    "open:workspace": "node scripts/runtime/open.mjs",
+    "doctor:workspace": "node scripts/runtime/open.mjs --check",
+    "test:workspace": "node --test test/execution/*.test.mjs",
+    "build:codex": "node plugins/build-codex.mjs",
+    "backup:workspace": "node scripts/runtime/recovery.mjs backup",
+    "restore:workspace": "node scripts/runtime/recovery.mjs restore",
+    "build:release": "node scripts/runtime/release.mjs",
+    "test:browser:core": "SYNPLEX_TEST_NO_MODELS=1 node --import ./scripts/testing/offline.mjs scripts/integration/material-question-browser-check.mjs"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "fflate": "0.8.3",
+    "mammoth": "1.13.0",
+    "pdf-parse": "2.4.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "acorn": "8.15.0",
+    "playwright-core": "1.62.1"
+  },
+  "description": "Project memory, evidence and task continuity workspace",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/weijiakang8-dotcom/Agenthub.git"
+  }
+}

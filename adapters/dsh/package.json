@@ -1,0 +1,12 @@
+{
+  "name": "@synplex/dsh-workspace-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "连接项目资料与进度，保存成果和经验；桌面安装仍需验证",
+  "exports": { ".": "./bridge.mjs", "./stdio": "./mcp.mjs" },
+  "bin": { "synplex-dsh-bridge": "./mcp.mjs" },
+  "files": ["bridge.mjs", "mcp.mjs", "README.md"],
+  "engines": { "node": ">=22.13" },
+  "scripts": { "start": "node mcp.mjs" }
+}

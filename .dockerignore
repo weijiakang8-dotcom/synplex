@@ -1,0 +1,13 @@
+.git
+.runtime
+.collaboration
+node_modules
+.env
+.env.*
+**/__pycache__
+**/*.pyc
+**/*.sqlite*
+**/*.log
+**/*.key
+**/*.pem
+vendor

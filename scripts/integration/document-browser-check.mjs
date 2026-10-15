@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import * as ingestion from '../../packages/ingestion/index.mjs';
+import {documentFixtures} from '../testing/document-fixtures.mjs';
+import {DOCUMENT_FORMATS} from '../../public/document-formats.js';
+const driver=process.env.SYNPLEX_BROWSER_DRIVER;
+if(!driver)throw new Error('Provide an already installed browser driver; no installation is performed');
+const {chromium}=await import(pathToFileURL(resolve(driver)).href);
+const dir=mkdtempSync(join(tmpdir(),'synplex-document-ui-')),repository=new WorkspaceRepository({dataDir:dir}),scope={projectId:'document-ui',versionId:null,branchId:null};
+const credential=repository.createCredential({ownerId:'fixture',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory','prepare_task','record_result']});
+const auth=repository.authenticate(credential.token),app=createWorkspaceServer({repository,modules:{ingestion},publicDir:resolve('public')}),url=await app.listen();
+const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--disable-background-networking']});
+try{
+ const page=await browser.newPage({viewport:{width:390,height:844}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const pair=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0})).status(),303);
+ await page.goto(url);await page.locator('nav [data-nav="materials"]').click();
+ await page.locator('[name="source"]').setInputFiles({name:'项目费用.xlsx',mimeType:DOCUMENT_FORMATS.xlsx,buffer:documentFixtures().xlsx});
+ await page.locator('#import-form button.primary').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('原文件已保存'));
+ await page.locator('nav [data-nav="materials"]').click();await page.locator('[data-action="preview-source"]').click();
+ await page.locator('#dialog[open]').waitFor();
+ assert.match(await page.locator('#dialog').innerText(),/工作表：费用/);assert.match(await page.locator('#dialog').innerText(),/SUM\(B2:B3\)/);assert.match(await page.locator('#dialog').innerText(),/不执行或重算/);
+ const downloadPromise=page.waitForEvent('download');await page.locator('#dialog [data-action="download"]').click();const download=await downloadPromise;
+ assert.equal(download.suggestedFilename(),'项目原始资料.xlsx');
+ await page.locator('#close-dialog').click();await page.locator('aside [data-nav="review"]').click();
+ const confirm=page.locator('[data-action="review"][data-status="confirmed"]').first();await confirm.click();
+ await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('已确认'));
+ assert.ok((await (await repository.forScope(auth,scope)).getState()).facts.length+(await (await repository.forScope(auth,scope)).getState()).decisions.length>0);
+ assert.deepEqual(errors,[]);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ const output=resolve('.runtime/implementation-baseline');mkdirSync(output,{recursive:true});writeFileSync(join(output,'document-browser.json'),JSON.stringify({checks:['mobile file input to HTTP import','full extracted text preview','cached value and unexecuted formula','original download has correct extension','human confirmation into project state','no page error or mobile overflow'],modelCalls:0},null,2));
+ await page.screenshot({path:join(output,'多格式资料-手机.png'),fullPage:true});process.stdout.write('多格式资料页面端到端验收通过，模型调用0。\n');
+}finally{await browser.close();await app.close();repository.close();rmSync(dir,{recursive:true,force:true});}

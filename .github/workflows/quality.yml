@@ -1,0 +1,41 @@
+name: Free quality checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    # The delivered product uses macOS lsof, Python and Seatbelt boundaries.
+    # Do not silently treat a Linux-only run as a Mac quality gate.
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+        env:
+          SYNPLEX_TEST_NO_MODELS: '1'
+      - name: Install the locked test browser
+        run: node node_modules/playwright-core/cli.js install chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
+      - name: Core mobile workflow, including lost response recovery
+        run: npm run test:browser:core
+        env:
+          SYNPLEX_TEST_NO_MODELS: '1'
+          SYNPLEX_TEST_BUNDLED_BROWSER: '1'
+          PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
+          SYNPLEX_QUESTION_EVIDENCE_DIR: .runtime/ci-material-question
+      - name: Keep deterministic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-mobile-workflow
+          path: .runtime/ci-material-question
+          if-no-files-found: ignore
+          retention-days: 7

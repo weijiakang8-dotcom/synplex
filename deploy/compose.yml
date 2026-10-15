@@ -1,0 +1,27 @@
+services:
+  workspace:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: synplex-workspace:${SYNPLEX_IMAGE_TAG:-local}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      SYNPLEX_PUBLIC_ORIGIN: ${SYNPLEX_PUBLIC_ORIGIN:?Set exact HTTPS origin}
+      SYNPLEX_BUILD_SHA: ${SYNPLEX_IMAGE_TAG:-local}
+    ports: ["127.0.0.1:${SYNPLEX_HTTP_PORT:-5260}:8080"]
+    volumes:
+      - synplex_data:/var/lib/synplex
+      - ${SYNPLEX_ACCESS_FILE:?Set private access file}:/run/secrets/synplex_access:ro
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    mem_limit: 768m
+    pids_limit: 96
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: '2'}
+volumes:
+  synplex_data:

@@ -1,52 +1,33 @@
-# ===== Python =====
+# Private runtime, data and reproducible build output
+.runtime/
+.collaboration/
+node_modules/
 __pycache__/
 *.py[cod]
-*$py.class
 .venv/
-.venv311/
 venv/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-*.egg-info/
-build/
-dist/
-
-# ===== 环境变量（不提交真实密钥） =====
-**/.env
-**/.env.*
+.env
+.env.*
+!.env.example
 !**/.env.example
-!**/.env.*.example
-
-# ===== Node / 前端 =====
-node_modules/
-frontend/node_modules
-frontend/dist/
-frontend/test-results/
-*.tsbuildinfo
-
-# ===== 日志 / 临时文件 =====
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
 *.log
-*.tmp
+*.jsonl
+!test/**/fixtures/*.jsonl
+!test/**/fixtures/**/*.jsonl
 .DS_Store
-Thumbs.db
-
-# ===== IDE / 编辑器 =====
-.idea/
 .vscode/
-*.swp
-
-# ===== 部署本地状态 =====
-docker/*.env
-k8s/*.env
-
-backups/
-docker/nginx/ssl/
-frontend/playwright-report/
-frontend/test-results/
-frontend/src-tauri/target/
-frontend/src-tauri/gen/
-
-# Benchmark 报告已版本化（可由 harness 重新生成）
+.idea/
+coverage/
+playwright-report/
+test-results/
+dist/
+*.pem
+*.key
+*.p12
+*.pfx
+*.safetensors
+*.gguf

@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Install this reviewed file as root-owned /usr/local/sbin/deploy-synplex.
+# This does not grant the runner Docker-group or general sudo access.
+set -Eeuo pipefail
+umask 077
+[[ $EUID == 0 ]] || { echo 'Administrator-managed release entry required' >&2; exit 2; }
+target=${1:-}
+[[ "$target" =~ ^[0-9a-f]{40}$ ]] || { echo 'Full lowercase commit SHA required' >&2; exit 2; }
+root=/opt/synplex
+config=/etc/synplex/deployment.env
+activation=/etc/synplex/activate
+rollback=/etc/synplex/rollback
+for file in "$config" "$activation" "$rollback"; do
+  [[ -f "$file" && ! -L "$file" && $(stat -c %u "$file") == 0 ]] || { echo "Missing root-managed configuration: $file" >&2; exit 42; }
+  mode=$(stat -c %a "$file")
+  (( (8#$mode & 8#022) == 0 )) || { echo 'Configuration is writable by another account' >&2; exit 42; }
+done
+# deployment.env and both route hooks are reviewed and controlled by root.
+source "$config"
+: "${SYNPLEX_ACCESS_FILE:?Private access file required}"
+: "${SYNPLEX_PUBLIC_ORIGIN:?HTTPS origin required}"
+: "${SYNPLEX_HEALTH_NETRC:?Private curl netrc required}"
+[[ "$SYNPLEX_PUBLIC_ORIGIN" == https://* && -s "$SYNPLEX_ACCESS_FILE" && -s "$SYNPLEX_HEALTH_NETRC" ]] || exit 42
+[[ $(stat -c %u "$SYNPLEX_HEALTH_NETRC") == 0 && $(stat -c %a "$SYNPLEX_HEALTH_NETRC") == 600 ]] || exit 42
+[[ -x "$activation" && -x "$rollback" ]] || exit 42
+mkdir -p "$root/releases" "$root/backups"
+exec 9>"$root/deployment.lock"
+flock -n 9 || { echo 'Another Synplex release is active' >&2; exit 3; }
+available=$(df --output=avail -k "$root" | tail -1)
+(( available >= 8*1024*1024 )) || { echo 'At least 8 GiB free is required for build, backup and rollback; no files removed' >&2; exit 4; }
+repository="$root/repository.git"
+[[ -d "$repository" ]] || git init --bare "$repository" >/dev/null
+git --git-dir="$repository" -c http.version=HTTP/1.1 fetch --quiet https://github.com/weijiakang8-dotcom/Agenthub.git main:refs/heads/main
+[[ $(git --git-dir="$repository" rev-parse main) == "$target" ]] || { echo 'Target must match current reviewed main' >&2; exit 4; }
+release="$root/releases/$target"
+if [[ ! -d "$release" ]]; then
+  mkdir "$release"
+  git --git-dir="$repository" archive "$target" | tar -x -C "$release"
+fi
+export SYNPLEX_IMAGE_TAG="$target" SYNPLEX_ACCESS_FILE SYNPLEX_PUBLIC_ORIGIN
+compose() { docker compose --project-name synplex --env-file "$config" -f "$1/deploy/compose.yml" "${@:2}"; }
+compose "$release" config --quiet
+if [[ -f "$root/active-release" ]]; then
+  baseline=$(cat "$root/active-release")
+  [[ "$baseline" =~ ^[0-9a-f]{40}$ ]] || exit 4
+  git --git-dir="$repository" diff --quiet "$baseline" "$target" -- migrations || { echo 'Data-format change requires separate migration review' >&2; exit 4; }
+fi
+compose "$release" build workspace
+previous=''
+[[ ! -f "$root/active-release" ]] || previous=$(cat "$root/active-release")
+[[ -z "$previous" || "$previous" =~ ^[0-9a-f]{40}$ ]] || exit 4
+activated=false
+on_error() {
+  local rc=$?
+  trap - ERR
+  if $activated; then
+    compose "$release" stop workspace || true
+    if [[ -n "$previous" ]]; then
+      export SYNPLEX_IMAGE_TAG="$previous"
+      compose "$root/releases/$previous" up -d --no-build workspace || true
+    fi
+    "$rollback" || true
+  fi
+  echo 'Release failed; original route restoration attempted; retained data and logs need review' >&2
+  exit "$rc"
+}
+trap on_error ERR
+if [[ -n "$previous" ]]; then
+  export SYNPLEX_IMAGE_TAG="$previous"
+  activated=true
+  compose "$root/releases/$previous" stop workspace
+  export SYNPLEX_IMAGE_TAG="$target"
+  activated=true
+  volume=$(docker volume inspect synplex_synplex_data --format '{{.Mountpoint}}')
+  tar -czf "$root/backups/$previous-$(date +%Y%m%dT%H%M%S).tgz" -C "$volume" .
+fi
+activated=true
+compose "$release" up -d --no-build workspace
+cid=$(compose "$release" ps -q workspace)
+for i in $(seq 1 45); do
+  state=$(docker inspect --format '{{.State.Health.Status}}' "$cid")
+  [[ "$state" != healthy ]] || break
+  [[ "$state" != unhealthy ]] || false
+  sleep 1
+done
+[[ "$state" == healthy ]] || false
+# The administrator supplies exact, reversible HTTPS route switching hooks.
+"$activation" "$target"
+curl --fail --silent --show-error --max-time 15 --proto '=https' --netrc-file "$SYNPLEX_HEALTH_NETRC" "$SYNPLEX_PUBLIC_ORIGIN/health" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True and d.get("buildSha")==sys.argv[1]' "$target"
+printf '%s\n' "$target" > "$root/active-release.new"
+mv "$root/active-release.new" "$root/active-release"
+trap - ERR
+echo "Synplex release verified: $target"

@@ -1,0 +1,2 @@
+// Synthetic data for the retained early-prototype regression only.
+export function seed(){return {version:1,projects:[{id:'example-project',name:'示例项目',initials:'S',color:'blue',example:true,subtitle:'保留依据，继续项目',goal:'完成一份有来源的项目说明',status:'示例资料待核对',next:'明确本次交付',updatedAt:'2026-01-01T00:00:00Z',constraints:['资料不是操作授权','费用未知不填零'],decisions:[],sources:[],lessons:[],tasks:[],timeline:[]}],tasks:[]};}

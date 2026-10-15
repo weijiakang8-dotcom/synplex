@@ -1,0 +1,60 @@
+// One mobile branching scenario. Only the executor response is a fixture;
+// HTTP, admission, SQLite, files, review and UI actions use the actual product.
+import assert from 'node:assert/strict';
+import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {randomUUID} from 'node:crypto';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {ExecutionCoordinator} from '../../services/workspace/execution.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import {sha256} from '../../packages/contracts/validate.mjs';
+import * as context from '../../packages/context/index.mjs';
+
+const {chromium}=await import(pathToFileURL(resolve(process.env.SYNPLEX_BROWSER_DRIVER)).href);
+const evidence=mkdtempSync(resolve('.runtime/implementation-baseline/task-branches-browser-'));
+const dir=mkdtempSync(join(tmpdir(),'synplex-branch-ui-')),repository=new WorkspaceRepository({dataDir:dir});
+const scope={projectId:'branch-ui-fixture',versionId:null,branchId:null};
+const human=repository.createCredential({ownerId:'fixture',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory','prepare_task','execute','record_result']}),auth=repository.authenticate(human.token);
+let calls=0;
+const adapter={mode:'delegated',fileInputs:true,async execute(input){
+ calls++;const failed=calls===1,bytes=Buffer.from(failed?'未完成的草稿，不能冒充交付成功。':'独立说明：这一步不使用未完成步骤的成果。'),id='report';
+ return {status:failed?'failed':'succeeded',result:{eventId:input.operationId,attemptId:input.attemptId,provider:'free-branch-fixture',summary:failed?'隔离夹具故意失败，草稿保留。':'独立步骤已生成文件，请检查。',artifacts:[{id,name:failed?'草稿.md':'独立说明.md',uri:'synplex-artifact:'+id,sha256:sha256(bytes),byteLength:bytes.length,mediaType:'text/markdown',verification:'reported'}],checks:[],usage:{observationScope:'host_unavailable',provider:null,model:null,inputTokens:null,outputTokens:null,cachedInputTokens:null,costUsd:null,pricingRevision:null,provenance:'unknown'},supersedesResultId:null,occurredAt:null},files:[{artifactId:id,bytes}]};
+}};
+const execution=new ExecutionCoordinator({repository,adapters:{codex:adapter}}),app=createWorkspaceServer({repository,modules:{context},execution,publicDir:resolve('public')}),url=await app.listen();
+let browser;
+try{
+ const post=async(method,body)=>{const r=await fetch(url+'/api/v1/'+method,{method:'POST',headers:{Authorization:'Bearer '+human.token,'Content-Type':'application/json'},body:JSON.stringify({protocolVersion:'synplex.workspace/1.0.0',scope,...body})});assert.ok(r.ok);return r.json();};
+ const meta=()=>({requestId:randomUUID(),expectedStateRevision:repository.state(auth,scope).stateRevision});
+ const base=await post('prepare_task',{...meta(),goal:'整理项目资料与一份独立的使用说明',constraints:['不覆盖旧文件'],acceptanceCriteria:['成果有真实文件，不编造成功'],mode:'delegated',executor:'codex',selectedOccurrenceIds:[],maxInputTokens:4000});
+ const step=(id,title,dependsOn=[])=>({id,title,instruction:'只处理本步，保留事实与旧文件。',acceptanceCriteria:['有可核对的文件'],dependsOn,sideEffect:'isolated_files'});
+ const plan=await post('ui_create_task_plan',{...meta(),baseRunId:base.run.id,plan:{title:'按依赖处理',nodes:[step('first','整理资料'),step('dependent','依据资料写报告',['first']),step('independent','整理独立说明')]}});
+ browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--disable-background-networking']});
+ const page=await browser.newPage({viewport:{width:390,height:844},acceptDownloads:true}),errors=[],external=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.route('**/*',route=>{const target=new URL(route.request().url());if(target.origin!==url){external.push(target.origin);return route.abort();}return route.continue();});
+ const pair=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0})).status(),303);
+ await page.goto(url);await page.locator('nav [data-nav=task]').click();
+ const node=id=>page.locator(`[data-ai-id="step:${plan.id}:${id}"]`);
+ const actions=()=>page.evaluate(async()=>{const {availableOperations}=await import('/semantic-actions.js');return availableOperations().filter(a=>a.action==='start_plan_step');});
+ assert.equal((await actions()).length,2);assert.equal(calls,0);assert.equal(await node('dependent').locator('[data-action=start-plan-step]').count(),0);
+ await page.locator(`[data-action=start-plan-step][data-id=first]`).click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('这一步已提交'));await execution.idle();
+ await page.locator('[data-ai-id="app:workspace-navigation:footer:refresh::::"]').click();await page.waitForFunction(()=>document.querySelector('[data-ai-role=task_step][data-ai-state=failed]'));
+ assert.match(await node('first').innerText(),/执行未完成/);assert.equal(repository.taskPlan(auth,scope,plan.id).nodes[1].status,'blocked_dependency');assert.equal(calls,1);
+ await node('independent').locator('[data-action=start-plan-step]').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('这一步已提交'));await execution.idle();assert.equal(calls,2);
+ await page.locator('nav [data-nav=results]').click();await page.locator('[data-ai-id="app:workspace-navigation:footer:refresh::::"]').click();
+ const completed=repository.list(auth,scope,'result').at(-1),card=page.locator(`[data-ai-id="result:${completed.id}"]`);
+ const download=page.waitForEvent('download');await card.locator('[data-action=artifact-download]').click();const file=await download;
+ assert.equal(sha256(readFileSync(await file.path())),completed.artifacts[0].sha256);
+ await card.locator('details').filter({has:page.locator('.result-review-form')}).evaluate(e=>e.open=true);
+ await card.locator('[name=status]').selectOption('passed');await card.locator('[name=note]').fill('已查看独立说明，满足这一步要求。');await card.locator('.result-review-form button').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('检查结论已保存'));
+ await page.reload();await page.locator('nav [data-nav=task]').click();
+ assert.match(await node('first').innerText(),/执行未完成/);assert.match(await node('dependent').innerText(),/等待前一步确认/);assert.match(await node('independent').innerText(),/已完成/);assert.equal(calls,2);
+ const final=repository.taskPlan(auth,scope,plan.id);assert.equal(final.complete,false);assert.deepEqual(final.startableStepIds,['first']);assert.equal(repository.usageLedger(auth,scope).rows.length,2);
+ assert.equal((await actions()).length,1);assert.match(await page.locator('[data-action=start-plan-step]').innerText(),/重做这一步/);assert.equal(await node('first').locator('[data-action=prepare-task-step]').innerText(),'重新准备');
+ const ambiguous=await page.evaluate(()=>[...document.querySelectorAll('[data-ai-state=ambiguous]')].map(e=>e.dataset.aiId));assert.deepEqual(ambiguous,[]);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:join(evidence,'独立步骤继续-手机.png'),fullPage:true});
+ writeFileSync(join(evidence,'result.json'),JSON.stringify({status:'passed',checks:['failure with draft remains failed','dependent step cannot start','choose another eligible step without retrying failure','actual file download and explicit human acceptance','reload retains failed/blocked/passed separately','semantic start ids unique and match eligibility','two usage rows and no task replay','no page errors, external requests or overflow'],fixtureExecutions:calls,modelCalls:0,fullAutomaticPlan:false},null,2),{mode:0o600});
+ console.log('可选择独立步骤、失败状态、文件下载与刷新保全通过；证据：'+evidence);
+}finally{await browser?.close();await execution.close();await app.close();repository.close();rmSync(dir,{recursive:true,force:true});}

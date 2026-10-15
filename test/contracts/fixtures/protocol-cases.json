@@ -1,0 +1,23 @@
+{
+  "kind": "synthetic_normalized_not_native_host_export",
+  "protocolVersion": "synplex.workspace/1.0.0",
+  "scope": {
+    "projectId": "fixture-project",
+    "versionId": "v2",
+    "branchId": null
+  },
+  "cases": [
+    "old_version_late_import",
+    "assistant_success_tool_failure",
+    "same_bytes_different_occurrences",
+    "same_event_changed_payload",
+    "emoji_utf16_offsets",
+    "partial_parse_unhandled_tail",
+    "short_cjk_and_code_identifier",
+    "chunk_restart_no_recharge",
+    "late_result_after_manual_change",
+    "unknown_host_usage",
+    "cancel_before_admission",
+    "writeback_retry_without_execution"
+  ]
+}
