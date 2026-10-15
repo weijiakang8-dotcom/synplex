@@ -1,3 +1,4 @@
+import {OUTPUT_LIMIT_NOTICE} from '../../services/workspace/model-contract.mjs';
 import {createAgentHubExecutor} from './agenthub.mjs';
 
 // The existing engine adapter still owns approval, submissions, reconciliation,
@@ -6,7 +7,7 @@ export function createModelConnectionExecutor({relay,relayEndpoint,...config}){
   const delegate=(choice,binding=null)=>createAgentHubExecutor({...config,model:choice.model,provider:choice.provider,effort:choice.effort,allowedModels:[{id:choice.model,label:'所选模型',provider:choice.provider,efforts:[choice.effort]}],modelBinding:binding?()=>binding:()=>null});
   const stored=input=>({model:input.packet?.executionOptions?.model??'lookup-only',provider:'synplex-run:'+input.operationId,effort:input.packet?.executionOptions?.effort??'default'});
   const fallback=()=>createAgentHubExecutor(config);
-  const finish=(context,id,receipt)=>{if(receipt&&context){receipt={...receipt,result:{...receipt.result,usage:relay.usage(context.auth,context.scope,id)}};relay.finish(context.auth,context.scope,id);}return receipt;};
+  const finish=(context,id,receipt)=>{if(receipt&&context){const limited=relay.calls(context.auth,context.scope,id).some(c=>c.truncated);receipt={...receipt,result:{...receipt.result,...(limited?{summary:receipt.result.summary+'\n\n'+OUTPUT_LIMIT_NOTICE}:{}),usage:relay.usage(context.auth,context.scope,id)}};relay.finish(context.auth,context.scope,id);}return receipt;};
   return {mode:'platform_owned',fileInputs:true,sourceFiles:true,
     getSelectionChoices:(auth,scope)=>auth?relay.choices(auth,scope):[],
     validateSelection:(options,context)=>relay.validate(context.auth,context.scope,options),

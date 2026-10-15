@@ -1,3 +1,4 @@
+export const OUTPUT_LIMIT_NOTICE='这次回复长度不够，内容或文件尚未完成。请到“模型设置”调高“每次回复长度上限”，再基于原任务继续；不会自动重做。';
 import {validateModelPricing,connectionPrice} from './model-pricing.mjs';
 import {ProtocolError} from '../../packages/contracts/validate.mjs';
 

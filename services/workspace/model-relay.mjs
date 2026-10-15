@@ -30,11 +30,12 @@ function providerBody(grant,body){
   if(Buffer.byteLength(JSON.stringify(value))+outputLimit>b.capabilities.contextWindow)throw modelFailure('本次资料超过所选模型的容量。','请减少资料或选择容量更大的模型。','budget_exceeded');
   return value;
 }
+function outputLimited(value){return value.choices?.some(c=>c.finish_reason==='length')===true||value.incomplete_details?.reason==='max_output_tokens'||value.response?.incomplete_details?.reason==='max_output_tokens';}
 function evidence(bytes,stream){
-  let usage=null,providerReceipt=null,completed=!stream;
+  let usage=null,providerReceipt=null,completed=!stream,truncated=false;
   const values=stream?bytes.toString('utf8').replace(/\r\n/g,'\n').split('\n\n').flatMap(block=>{const s=block.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trimStart()).join('\n');if(s==='[DONE]'){completed=true;return [];}return s?[JSON.parse(s)]:[];}):[JSON.parse(bytes)];
-  for(const v of values){if(v.id)providerReceipt=String(v.id).slice(0,200);if(v.usage)usage=probeUsage(v.usage);if(v.type==='response.completed'){completed=true;usage=probeUsage(v.response?.usage);providerReceipt=v.response?.id??providerReceipt;}if(v.error||['failed','incomplete'].includes(v.status)||['response.failed','response.incomplete','error'].includes(v.type))completed=false;}
-  return {usage,providerReceipt,completed};
+  for(const v of values){truncated ||= outputLimited(v);if(v.id)providerReceipt=String(v.id).slice(0,200);if(v.usage)usage=probeUsage(v.usage);if(v.type==='response.completed'){completed=true;usage=probeUsage(v.response?.usage);providerReceipt=v.response?.id??providerReceipt;}if(v.error||['failed','incomplete'].includes(v.status)||['response.failed','response.incomplete','error'].includes(v.type))completed=false;}
+  return {usage,providerReceipt,completed,truncated};
 }
 export class ModelRelay{
   #repository;#store;#transport;#active=new Map();#closed=false;
@@ -63,7 +64,7 @@ export class ModelRelay{
     let resolveDone;const done=new Promise(resolve=>{resolveDone=resolve;});this.#active.set(reserved.value.id,{controller,done});const chunks=[];let total=0;
     try{
       await this.#transport({endpoint:profile.endpoint,path,secret:profile.secret,body:request,signal:controller.signal,onChunk:bytes=>{total+=bytes.length;if(total>2*1024*1024)throw modelFailure('模型回复超过本次容量。');chunks.push(Buffer.from(bytes));}});
-      const bytes=Buffer.concat(chunks),observed=evidence(bytes,request.stream===true);if(!observed.completed)throw modelFailure('原模型回复尚未完整返回。');
+      const bytes=Buffer.concat(chunks),observed=evidence(bytes,request.stream===true);if(!observed.completed&&!observed.truncated)throw modelFailure('原模型回复尚未完整返回。');
       const contentType=request.stream?'text/event-stream':'application/json';this.#store.finish(reserved.value.id,{status:'completed',...observed,response:bytes,contentType});return {bytes,contentType,replayed:false};
     }catch{let observed={};try{observed=evidence(Buffer.concat(chunks),request.stream===true);}catch{}this.#store.finish(reserved.value.id,{status:'unknown',...observed});throw modelFailure('原模型回复尚需核对，已有记录保留。','不会自动重试或更换模型。','conflict');}
     finally{signal?.removeEventListener('abort',abort);this.#active.delete(reserved.value.id);resolveDone();}

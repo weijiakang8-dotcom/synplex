@@ -1,6 +1,6 @@
 import {randomUUID,createHmac} from 'node:crypto';
 import {payloadHash} from '../../packages/contracts/validate.mjs';
-import {modelFailure} from './model-contract.mjs';
+import {modelFailure,OUTPUT_LIMIT_NOTICE} from './model-contract.mjs';
 import {modelPrivateToken} from './model-vault.mjs';
 
 export const RELAY_TABLES=['model_execution_grants','model_execution_calls'];
@@ -29,13 +29,14 @@ export class ModelRelayStore{
       const hash=this.inputHash(grant,body),old=this.#db.prepare('SELECT * FROM model_execution_calls WHERE grant_id=? AND input_hash=?').get(grant.id,hash);
       if(old){if(old.status==='completed')return {fresh:false,value:decode(old),response:old.response};throw modelFailure('原模型请求尚需核对。','已有内容保留，不会重新计费提交。','conflict');}
       if(this.#db.prepare("SELECT 1 FROM model_execution_calls WHERE grant_id=? AND status IN ('running','unknown')").get(grant.id))throw modelFailure('这个任务仍有模型请求需要核对。','请先查看原请求和服务商记录。','conflict');
+      if(this.#db.prepare("SELECT 1 FROM model_execution_calls WHERE grant_id=? AND json_extract(body_json,'$.truncated')=1").get(grant.id))throw modelFailure(OUTPUT_LIMIT_NOTICE,'保留原成果，调整回复长度后准备修改。','budget_exceeded');
       if(this.#db.prepare('SELECT count(*) n FROM model_execution_calls WHERE grant_id=?').get(grant.id).n>=grant.maxCalls)throw modelFailure('本次任务已达到模型请求上限。','请核对已有成果，再决定是否调整任务。','budget_exceeded');
       const value={id:randomUUID(),grantId:grant.id,operationId:grant.operationId,attemptId:grant.attemptId,selection:grant.selection,...(grant.binding.priceSnapshot?{priceSnapshot:grant.binding.priceSnapshot}:{}),status:'running',usage:null,costUsd:null,providerReceipt:null,startedAt:new Date().toISOString(),finishedAt:null};
       this.#db.prepare('INSERT INTO model_execution_calls VALUES(?,?,?,?,?,NULL)').run(value.id,grant.id,hash,'running',JSON.stringify(value));return {fresh:true,value};
     });
   }
-  finish(id,{status,usage=null,providerReceipt=null,response=null,contentType=null}){
-    this.#transaction(()=>{const row=this.#db.prepare('SELECT * FROM model_execution_calls WHERE id=?').get(id);if(!row||row.status!=='running')return;const value={...decode(row),status,usage,providerReceipt,contentType,finishedAt:new Date().toISOString()};this.#db.prepare('UPDATE model_execution_calls SET status=?,body_json=?,response=? WHERE id=?').run(status,JSON.stringify(value),response,id);});
+  finish(id,{status,usage=null,providerReceipt=null,response=null,contentType=null,truncated=false}){
+    this.#transaction(()=>{const row=this.#db.prepare('SELECT * FROM model_execution_calls WHERE id=?').get(id);if(!row||row.status!=='running')return;const value={...decode(row),status,usage,providerReceipt,contentType,truncated,finishedAt:new Date().toISOString()};this.#db.prepare('UPDATE model_execution_calls SET status=?,body_json=?,response=? WHERE id=?').run(status,JSON.stringify(value),response,id);});
   }
   complete(operationId){const grant=this.byOperation(operationId);if(!grant)return null;const pending=this.#db.prepare("SELECT 1 FROM model_execution_calls WHERE grant_id=? AND status IN ('running','unknown')").get(grant.id);if(pending)return null;grant.status='completed';this.#db.prepare('UPDATE model_execution_grants SET body_json=? WHERE id=?').run(JSON.stringify(grant),grant.id);return grant;}
   calls(operationId){const grant=this.byOperation(operationId);return grant?this.#db.prepare('SELECT body_json FROM model_execution_calls WHERE grant_id=? ORDER BY rowid').all(grant.id).map(decode):[];}
