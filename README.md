@@ -2,7 +2,7 @@
 <h1 align="center">Synplex</h1>
 <p align="center"><strong>把模糊问题变成有依据的结构化系统。</strong></p>
 <p align="center">记住为什么这样做，带着依据继续，把项目真正做下去。</p>
-<p align="center"><a href="https://synplex.xyz">网站</a> · <a href="docs/INSTALLATION.md">开始使用</a> · <a href="docs/USER_GUIDE.md">使用指南</a> · <a href="docs/EXTENSIONS.md">连接 Codex / DeepSeek Harness</a> · <a href="https://github.com/weijiakang8-dotcom/Agenthub/issues">反馈</a></p>
+<p align="center"><a href="https://synplex.xyz">网站</a> · <a href="docs/INSTALLATION.md">开始使用</a> · <a href="docs/USER_GUIDE.md">使用指南</a> · <a href="docs/EXTENSIONS.md">连接 Codex / DeepSeek Harness</a> · <a href="https://github.com/weijiakang8-dotcom/synplex/issues">反馈</a></p>
 
 ---
 
@@ -38,8 +38,8 @@ Synplex 把资料、决定、任务和成果放进同一个项目。重要记录
 需要 **Node.js 26**、npm、Git 和 `lsof`。macOS 是主要验收平台；独立执行引擎另需 Python 3.11、PostgreSQL、Valkey 与模型连接。仅整理资料和接续项目不需要模型密钥。
 
 ```sh
-git clone https://github.com/weijiakang8-dotcom/Agenthub.git
-cd Agenthub
+git clone https://github.com/weijiakang8-dotcom/synplex.git
+cd synplex
 npm ci --ignore-scripts
 npm run open:workspace
 ```
@@ -78,7 +78,7 @@ npm run build:release -- /absolute/path/to/new-release --engine-source vendor/ag
 
 ## 参与改进
 
-遇到问题，请通过 [Issues](https://github.com/weijiakang8-dotcom/Agenthub/issues) 提供操作步骤、预期与实际结果、运行版本及脱敏后的问题编号。欢迎围绕真实任务提交反馈和改进，详见 [贡献指南](CONTRIBUTING.md)。
+遇到问题，请通过 [Issues](https://github.com/weijiakang8-dotcom/synplex/issues) 提供操作步骤、预期与实际结果、运行版本及脱敏后的问题编号。欢迎围绕真实任务提交反馈和改进，详见 [贡献指南](CONTRIBUTING.md)。
 
 ## 开源与致谢
 

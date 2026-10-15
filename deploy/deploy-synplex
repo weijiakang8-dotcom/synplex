@@ -30,7 +30,7 @@ available=$(df --output=avail -k "$root" | tail -1)
 (( available >= 8*1024*1024 )) || { echo 'At least 8 GiB free is required for build, backup and rollback; no files removed' >&2; exit 4; }
 repository="$root/repository.git"
 [[ -d "$repository" ]] || git init --bare "$repository" >/dev/null
-git --git-dir="$repository" -c http.version=HTTP/1.1 fetch --quiet https://github.com/weijiakang8-dotcom/Agenthub.git main:refs/heads/main
+git --git-dir="$repository" -c http.version=HTTP/1.1 fetch --quiet https://github.com/weijiakang8-dotcom/synplex.git main:refs/heads/main
 [[ $(git --git-dir="$repository" rev-parse main) == "$target" ]] || { echo 'Target must match current reviewed main' >&2; exit 4; }
 release="$root/releases/$target"
 if [[ ! -d "$release" ]]; then

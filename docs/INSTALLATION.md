@@ -8,8 +8,8 @@
 - 使用自有执行引擎时，另需 Python 3.11、uv、PostgreSQL 16 工具和 Valkey。相关环境独立创建，不修改其他工具的环境。
 
 ```sh
-git clone https://github.com/weijiakang8-dotcom/Agenthub.git
-cd Agenthub
+git clone https://github.com/weijiakang8-dotcom/synplex.git
+cd synplex
 npm ci --ignore-scripts
 npm run open:workspace
 ```
