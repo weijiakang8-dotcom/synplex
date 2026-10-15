@@ -2,7 +2,7 @@
 set -euo pipefail
 work=$(mktemp -d)
 name=synplex-ci-$RANDOM
-cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -f "$work/access"; rmdir "$work"; }
+cleanup() { rc=$?; if [ "$rc" -ne 0 ]; then docker logs "$name" 2>&1 || true; fi; docker rm -f "$name" >/dev/null 2>&1 || true; rm -f "$work/access"; rmdir "$work"; }
 trap cleanup EXIT
 printf 'ci-user:%s\n' "$(openssl passwd -apr1 'test-only-container-password')" > "$work/access"
 chmod 644 "$work/access"
