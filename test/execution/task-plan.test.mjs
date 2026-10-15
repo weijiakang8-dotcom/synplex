@@ -100,6 +100,9 @@ test('循环/缺步骤拒绝、准备事务回滚、未知原执行不能局部�
  assert.throws(()=>validateTaskPlan({title:'缺少',nodes:[node('a',['missing'])]}),e=>e.code==='validation_failed');
  const price=validatePrice({provider:'fixture',model:'small',validFrom:'2026-10-01T00:00:00Z',validUntil:'2026-10-31T00:00:00Z',inputUsdPerMillion:1,cachedInputUsdPerMillion:0.1,outputUsdPerMillion:2,source:'isolated-test-only'});
  const quoted=prices=>compareTaskRoutes({plan:{id:'fixture',baseRunId:'base',nodes:[node('a')]},packet:{},choices:[{id:'small',provider:'fixture',efforts:['low']}],prices,quotedAt:'2026-10-15T00:00:00Z'}).routes[0];
+ const assumptions={contextWindow:32000,maxOutputTokens:256,maxCalls:24},choice={id:'small',provider:'fixture',efforts:['low'],pricing:price,estimateLimits:assumptions};
+ const assumed=compareTaskRoutes({plan:{id:'fixture',baseRunId:'base',nodes:[node('a')]},packet:{},choices:[choice],prices:[],quotedAt:'2026-10-15T00:00:00Z'}).routes[0];
+ assert.ok(assumed.estimate.singleCallReferenceUsd>0);assert.ok(assumed.estimate.planningEnvelopeUsd>assumed.estimate.singleCallReferenceUsd);assert.equal(assumed.estimatedUsd,null);assert.equal(assumed.estimatedSeconds,null);
  assert.equal(quoted([price]).assignments[0].price.revision,price.revision);assert.equal(quoted([price]).estimatedUsd,null,'单价已知不能冒充总费用已知');
  assert.equal(quoted([price,price]).assignments[0].price,null,'冲突价表不能挑便宜一项');assert.equal(quoted([{...price,validUntil:'2026-10-14T00:00:00Z'}]).assignments[0].price,null);
  const h=await setup(t),base=await h.prepare(),plan=(await h.post('ui_create_task_plan',{...h.meta(),baseRunId:base.run.id,plan:{title:'单步',nodes:[node('read')]}})).value;

@@ -22,7 +22,8 @@ export class ExecutionCoordinator {
       this.#adapters.set(owner,Object.freeze({...adapter}));
     }
   }
-  executors() {return [...this.#adapters].map(([owner,a])=>({owner,mode:a.mode,cancellation:typeof a.cancel==='function',selectionChoices:a.selectionChoices??[],inputRecovery:typeof a.inspectPendingInput==='function'&&typeof a.resumeObservation==='function'}));}
+  acquireModelSlot(signal){return this.#slots.acquire(signal);}
+  executors(auth=null,scope=null) {return [...this.#adapters].map(([owner,a])=>({owner,mode:a.mode,cancellation:typeof a.cancel==='function',selectionChoices:a.getSelectionChoices?.(auth,scope)??a.selectionChoices??[],inputRecovery:typeof a.inspectPendingInput==='function'&&typeof a.resumeObservation==='function'}));}
   async start(auth,input) {
     validateExecutionRequest(input,true);
     if(this.#closed)throw new ProtocolError('capability_unavailable','执行服务正在关闭。','查询已有操作，稍后继续。','lookup_operation');
@@ -38,9 +39,9 @@ export class ExecutionCoordinator {
         const adapter=this.#adapters.get(state.run.executorOwner);
         if(!adapter||adapter.mode!==state.run.mode)throw new ProtocolError('capability_unavailable','所选执行工具尚未接通。','连接原执行工具，再接续已有操作。','after_input');
         const packet=this.repository.read(auth,input.scope,'context',state.run.contextPacketId,'execute');
-        this.#validateSelection(adapter,packet);
+        this.#validateSelection(adapter,packet,{auth,scope:input.scope});
         const files=this.#inputFiles(auth,input.scope,adapter,packet);
-        if(typeof adapter.preflight==='function')await adapter.preflight({packet,sourceFiles:files.filter(f=>f.sourceId)});
+        if(typeof adapter.preflight==='function')await adapter.preflight({packet,authorization:{auth,scope:input.scope},sourceFiles:files.filter(f=>f.sourceId)});
         this.#schedule(auth,input.scope,prior.operationId);
       }
       return state;
@@ -48,17 +49,17 @@ export class ExecutionCoordinator {
     const run=this.repository.read(auth,input.scope,'run',input.runId),adapter=this.#adapters.get(run?.executorOwner);
     if(!adapter || adapter.mode!==run.mode)throw new ProtocolError('capability_unavailable','所选执行工具尚未接通。','连接对应执行工具；准备的工作说明仍保留。','after_input');
     const packet=this.repository.read(auth,input.scope,'context',run.contextPacketId,'execute');
-    this.#validateSelection(adapter,packet);
+    this.#validateSelection(adapter,packet,{auth,scope:input.scope});
     const files=this.#inputFiles(auth,input.scope,adapter,packet);
-    if(typeof adapter.preflight==='function')await adapter.preflight({packet,sourceFiles:files.filter(f=>f.sourceId)}); // Known unavailable transport must not create a paid/unknown attempt.
+    if(typeof adapter.preflight==='function')await adapter.preflight({packet,authorization:{auth,scope:input.scope},sourceFiles:files.filter(f=>f.sourceId)}); // Known unavailable transport must not create a paid/unknown attempt.
     const admitted=this.repository.admitExecution(auth,input);
     this.#schedule(auth,input.scope,admitted.operationId);
     return this.repository.executionState(auth,input.scope,admitted.operationId);
   }
-  #validateSelection(adapter,packet){
+  #validateSelection(adapter,packet,context){
     if(packet.taskInputs?.some(x=>x.artifacts.length)&&!adapter.fileInputs)throw new ProtocolError('capability_unavailable','这个工具暂时不能读取前一步的完整文件。','选择可以读取文件的执行工具；上一版成果仍保留，本次没有开工。','after_input');
     if(packet.executionOptions&&!adapter.validateSelection)throw new ProtocolError('capability_unavailable','这个工具还不能从这里选择型号。','使用工具自身的设置，或选择可以指定型号的工具。','after_input');
-    adapter.validateSelection?.(packet.executionOptions);
+    adapter.validateSelection?.(packet.executionOptions,context);
   }
   #inputFiles(auth,scope,adapter,packet){
     const files=[...this.repository.taskInputFiles(auth,scope,packet),...(adapter.sourceFiles?this.repository.selectedSourceFiles(auth,scope,packet):[])];
@@ -91,7 +92,7 @@ export class ExecutionCoordinator {
       // Preserve a late real receipt after a timeout. Never turn a network error into a fake failed result.
       const dispatch=recovery?adapter.resumeObservation:adapter.execute;
       const work=Promise.resolve().then(()=>dispatch(Object.freeze({operationId:id,attemptId:claimed.attemptId,
-        idempotencyKey:id,packet:structuredClone(claimed.packet),signal:controller.signal,
+        idempotencyKey:id,authorization:{auth,scope},packet:structuredClone(claimed.packet),signal:controller.signal,
         inputFiles:this.#inputFiles(auth,scope,adapter,claimed.packet),
         remoteGuard:configuration=>new RemoteSubmissionGuard({repository:this.repository,auth,scope,...configuration}),
         requestInput:async prompt=>{
@@ -178,7 +179,7 @@ export class ExecutionCoordinator {
       if(identified)this.repository.bindRemoteTask(auth,scope,id,job.attemptId,identified.taskId);
       remoteSubmission=this.repository.read(auth,scope,'remote_submission',id);
     }
-    const receipt=await adapter.lookup({operationId:id,attemptId:job.attemptId,remoteSubmission});
+    const receipt=await adapter.lookup({authorization:{auth,scope},operationId:id,attemptId:job.attemptId,remoteSubmission});
     if(receipt){
       if(!job.receiptId)this.repository.saveExecutionReceipt(auth,scope,id,job.claimId,receipt);
       this.#writeback(auth,scope,id,receipt);

@@ -55,7 +55,7 @@ def setup(root, backend, pg_bin, valkey, *, api_port, redis_port, database_port)
         owned.close()
     from handoff_state import PROTOCOL
     config={"format":"synplex.engine-startup/1","handoffProtocol":PROTOCOL,"backend":str(backend),"lockSha256":lock_hash,"sourceIdentity":source,"runtimeIdentity":runtime_source,
-            "valkey":str(valkey.resolve()),"apiPort":api_port,"redisPort":redis_port,"databasePort":database_port,
+            "valkey":str(valkey.absolute()),"apiPort":api_port,"redisPort":redis_port,"databasePort":database_port,
             "infrastructureId":infrastructure["id"],"modelCalls":0,"providerConfigured":False}
     verify_source(backend, config)
     verify_runtime(config)
@@ -80,7 +80,8 @@ def configuration(root):
             or Path(state["backend"]).resolve()!=backend or Path(infrastructure["pgdata"]).resolve()!=(root / "infrastructure/postgres").resolve()):
         raise RuntimeError("Engine, source and database identities differ")
     from engine_provider import load_provider
-    configured = load_provider(root / "engine", state) is not None
+    from model_relay import enabled as relay_enabled
+    configured = load_provider(root / "engine", state) is not None or relay_enabled(state)
     if saved.get("providerConfigured") is not configured:
         raise RuntimeError("模型配置状态不一致，不能自动启用。")
     return saved,infrastructure,state
@@ -159,6 +160,51 @@ def ensure_database_idle(data):
             raise RuntimeError("原任务、待发送操作或工具结果尚未核对，不能自动重启执行。")
 
 
+def disabled_evaluation_id(raw):
+    """Recognize only inert post-run evaluation messages; never execute them."""
+    import base64
+    import uuid
+    if len(raw) > 65536:
+        raise RuntimeError("停用的评估记录过大，需先核对。")
+    try:
+        message = json.loads(raw)
+        properties = message['properties']
+        if (message.get('content-type') != 'application/json' or properties.get('body_encoding') != 'base64'
+                or message.get('headers', {}).get('task') != 'agenthub.evaluate_execution'
+                or properties.get('delivery_info') != {'exchange': '', 'routing_key': 'synplex-evaluation-disabled'}):
+            raise ValueError('unexpected disabled message')
+        args, kwargs, options = json.loads(base64.b64decode(message['body'], validate=True))
+        if (not isinstance(args, list) or len(args) != 1 or kwargs != {} or not isinstance(options, dict)
+                or set(options) - {'callbacks', 'errbacks', 'chain', 'chord'} or any(options.values())):
+            raise ValueError('unexpected evaluation arguments')
+        return str(uuid.UUID(args[0]))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise RuntimeError("停用队列中有无法确认的操作，未删除或重新派发。") from None
+
+
+def verify_disabled_evaluations(client, key, data):
+    """Keep bytes in the disabled queue, but distinguish them from active work."""
+    import psycopg
+    from local_runner import database_connection
+    size = client.llen(key)
+    if size > 10000:
+        raise RuntimeError("停用的评估记录需要整理核对，本次未自动清理。")
+    with psycopg.connect(**database_connection(data, data['database'])) as db:
+        db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        for offset in range(0, size, 128):
+            messages = client.lrange(key, offset, min(size - 1, offset + 127))
+            if len(messages) != min(128, size - offset):
+                raise RuntimeError("队列记录发生变化，未继续。")
+            for raw in messages:
+                execution_id = disabled_evaluation_id(raw)
+                row = db.execute("SELECT status,lease_owner,organization_id FROM executions WHERE id=%s", (execution_id,)).fetchone()
+                if (not row or row[0] not in {'completed', 'failed', 'rolled_back'} or row[1] is not None
+                        or str(row[2]) != data['organization_id']):
+                    raise RuntimeError("停用的评估记录对应任务尚未结束或归属不符，需先核对。")
+    if client.llen(key) != size:
+        raise RuntimeError("队列记录发生变化，未继续。")
+
+
 def ensure_queue_idle(data):
     """The private broker's ready AND unacknowledged work must be preserved."""
     from redis import Redis
@@ -172,6 +218,12 @@ def ensure_queue_idle(data):
             pending = ((kind == b'list' and client.llen(key))
                        or (key == b'unacked' and client.hlen(key))
                        or (key == b'unacked_index' and client.zcard(key)))
+            # The isolated worker consumes ONLY synplex-isolated. Old code
+            # deliberately routes paid post-run evaluation elsewhere. Preserve
+            # those messages, validate their terminal task, never consume them.
+            if pending and kind == b'list' and key == b'synplex-evaluation-disabled':
+                verify_disabled_evaluations(client, key, data)
+                continue
             if pending:
                 raise RuntimeError("原队列仍有待核对的工作，未移除或重新派发任何消息。")
     finally:
@@ -242,7 +294,7 @@ def _supervise_locked(root, lock_file):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command",choices=["setup","run","check","configure-provider"])
+    parser.add_argument("command",choices=["setup","run","check","configure-provider","configure-relay"])
     parser.add_argument("--root",type=Path,required=True)
     parser.add_argument("--backend",type=Path)
     parser.add_argument("--postgres-bin",type=Path)
@@ -251,6 +303,7 @@ def main():
     parser.add_argument("--redis-port",type=int,default=5216)
     parser.add_argument("--database-port",type=int,default=5218)
     parser.add_argument("--profile",type=Path)
+    parser.add_argument("--relay-endpoint")
     args=parser.parse_args()
     if args.command=="setup":
         if not all([args.backend,args.postgres_bin,args.valkey]):raise RuntimeError("Explicit engine source and database/queue tools required")
@@ -260,6 +313,9 @@ def main():
         if not args.profile:raise RuntimeError("需要明确的私有模型连接配置文件")
         from engine_provider import configure
         print(json.dumps(configure(args.root,args.profile),ensure_ascii=False))
+    elif args.command=="configure-relay":
+        from model_relay import configure
+        print(json.dumps(configure(args.root,args.relay_endpoint),ensure_ascii=False))
     elif args.command=="check":
         configuration(args.root.resolve())
         ensure_execution_allowed(args.root.resolve())

@@ -65,3 +65,22 @@
  .task-progress .button-row button{font-size:12px}
  .layout-split .workspace-main .grid{grid-template-columns:1fr}
 }
+
+/* Conversation and execution share the existing task surface. */
+.task-mode{display:flex;gap:6px;margin-bottom:20px;border-bottom:1px solid var(--line);padding-bottom:10px}
+.task-mode button[aria-pressed=true]{background:var(--text);color:var(--surface)}
+#task-chat-panel[hidden],#task-execute-panel[hidden]{display:none}
+.chat-toolbar,.chat-controls{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+.chat-toolbar label{flex:1;min-width:0}.chat-toolbar select{max-width:100%}
+.chat-controls label{flex:1;min-width:140px}.chat-controls button{flex-shrink:0}
+.chat-turn{padding:20px 0;border-bottom:1px solid var(--line)}
+.chat-turn h3{font-size:14px;margin:0 0 12px}.chat-user{margin-bottom:22px}
+.chat-user>.excerpt{background:var(--bg);padding:14px;margin:0}.chat-answer{min-width:0}
+.chat-answer pre{font-family:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-background article{padding:10px 0;border-bottom:1px solid var(--line)}
+.chat-background p{white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-empty{text-align:center;padding:50px 10px}
+#chat-composer{margin-top:24px;padding:18px;border:1px solid var(--line);background:var(--surface)}
+#chat-composer textarea{width:100%;resize:vertical;min-height:90px}
+#chat-composer .chat-controls{margin-top:12px}
+@media(max-width:600px){.chat-controls{align-items:stretch}.chat-controls label{min-width:0;flex-basis:42%}.chat-controls button{flex:1}.chat-turn{padding:16px 0}}

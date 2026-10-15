@@ -1,3 +1,4 @@
+import {knownModelMessage} from './model-feedback.js';
 // Display wording only. Never write these translations back to source data,
 // task packets, executor prompts, file names, or protocol identifiers.
 const toolWords = Object.freeze({
@@ -88,6 +89,7 @@ const errors = Object.freeze({
   writeback_pending: '任务已结束，但结果尚未保存完整。请只补存结果，不要重新执行任务。'
 });
 export function errorText(error) {
+  if(knownModelMessage(error?.message))return error.message;
   const reading='当前正在读取多份成果，请稍后再打开。',readingHelp=reading+'原文件和任务仍保留，无需重新执行。';
   if(error?.code==='capability_unavailable'&&[reading,readingHelp].includes(error.message))return readingHelp;
   if (errors[error?.code]) return errors[error.code];

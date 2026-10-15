@@ -77,11 +77,14 @@ def node_call(node, code, args, log):
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
-def prepare(backend, pg_bin, valkey, node, evidence):
+def prepare(backend, pg_bin, valkey, node, evidence, *, relay=False):
     engine, workspace = evidence / "source-engine", evidence / "source-workspace"
     ports = [port() for _ in range(3)]
     assert len(set(ports)) == 3
     setup(engine, backend, pg_bin, valkey, api_port=ports[0], redis_port=ports[1], database_port=ports[2])
+    if relay:
+        from model_relay import configure
+        configure(engine, "http://127.0.0.1:5411/internal/model/v1")
     runtime = ROOT / "integrations/agenthub/engine_runtime.py"
     supervised([sys.executable, "-B", str(runtime), "run", "--root", str(engine)],
                evidence / "source-supervisor.log", f"http://127.0.0.1:{ports[0]}/health/live")
@@ -102,12 +105,12 @@ def prepare(backend, pg_bin, valkey, node, evidence):
     seed = """
 import {seedIdleRecoveryWorkspace} from './scripts/testing/idle-recovery-fixture.mjs';
 import {readFileSync,writeFileSync} from 'node:fs';
-const [workspace,engine,task,file]=process.argv.slice(1),data=JSON.parse(readFileSync(engine+'/engine/bootstrap.json'));
-const ids=seedIdleRecoveryWorkspace(workspace,engine,data,task);
+const [workspace,engine,task,file,relay]=process.argv.slice(1),data=JSON.parse(readFileSync(engine+'/engine/bootstrap.json'));
+const ids=seedIdleRecoveryWorkspace(workspace,engine,data,task,{relay:relay==='true'});
 writeFileSync(file,JSON.stringify(ids),{flag:'wx',mode:0o600});
 """
-    node_call(node, seed, [workspace, engine, task, evidence / "bindings.json"], evidence / "seed.log")
-    write_private(evidence / "baseline.json", {"engineTables": before, "taskId": task, "modelCalls": 0})
+    node_call(node, seed, [workspace, engine, task, evidence / "bindings.json", str(relay).lower()], evidence / "seed.log")
+    write_private(evidence / "baseline.json", {"engineTables": before, "taskId": task, "modelCalls": 0, "relayMode": relay})
     write_private(evidence / "stage.json", {"stage": "prepared", "setupRepeated": False, "seedRepeated": False})
 
 
@@ -219,10 +222,15 @@ def finish(node, evidence):
 def verify_runtime(node, evidence):
     restored = evidence / "restored"
     saved, infra, data = configuration(restored / "engine")
-    assert saved["providerConfigured"] is False
+    relay = read_private(evidence / "baseline.json").get("relayMode", False)
+    assert saved["providerConfigured"] is relay
     task = read_private(evidence / "baseline.json")["taskId"]
     connection = read_private(restored / "workspace/connection.json")
     expected = read_private(evidence / "baseline.json")["engineTables"]
+    if relay:
+        from relay_recovery import workspace_relay_endpoint
+        assert data["model_relay_endpoint"] == workspace_relay_endpoint(restored / "workspace")
+        assert data["model_relay_endpoint"] != read_private(evidence / "snapshot/engine/engine/bootstrap.json")["model_relay_endpoint"]
     before_code = "import {inspectDatabase} from './scripts/runtime/recovery.mjs';console.log(JSON.stringify(inspectDatabase(process.argv[1]+'/workspace.sqlite')));"
     before = node_call(node, before_code, [restored / "workspace"], evidence / "workspace-before.json")
     token = (restored / "engine/engine/access-token").read_text().strip()
@@ -233,6 +241,17 @@ def verify_runtime(node, evidence):
         with urllib.request.urlopen(request, timeout=5) as response:
             row = json.load(response)
         assert row["id"] == task and row["status"] == "completed"
+        if relay:
+            body = json.dumps({"protocolVersion": "synplex.workspace/1.0.0", "scope": connection["scope"]}).encode()
+            headers = {"Content-Type": "application/json", "Authorization": "Bearer " + Path(connection["uiTokenFile"]).read_text().strip()}
+            request = urllib.request.Request(connection["endpoint"] + "/api/v1/ui_models", data=body, headers=headers)
+            with urllib.request.urlopen(request, timeout=5) as response:
+                models = json.load(response)["connections"]
+            assert len(models) == 1 and models[0]["models"][0]["pricing"]["source"] == "fixture-price"
+            assert "synthetic-private-restore-key" not in json.dumps(models)
+            request = urllib.request.Request(connection["endpoint"] + "/api/v1/ui_chat_list", data=json.dumps({"protocolVersion": "synplex.workspace/1.0.0", "scope": connection["scope"], "cursor": None}).encode(), headers=headers)
+            with urllib.request.urlopen(request, timeout=5) as response:
+                assert len(json.load(response)["items"]) == 1
         body = json.dumps({"protocolVersion": "synplex.workspace/1.0.0", "scope": connection["scope"],
                            "resultId": delivery["resultId"], "artifactId": delivery["artifactId"]}).encode()
         request = urllib.request.Request(connection["endpoint"] + "/api/v1/artifact_file", data=body,
@@ -287,19 +306,19 @@ def verify_runtime(node, evidence):
               "syntheticTerminalTask": task, "originalTaskIdentityPreserved": True, "allDatabaseTablesUnchanged": True,
               "workspaceFingerprintUnchanged": True, "sameIntentResumedAfterProcessExit": True,
               "originalArtifactDownloadedFromRecoveredHttp": True,
-              "originalStillRefusedAfterTargetShutdown": True, "modelCalls": 0, "taskExecutions": 0,
+              "originalStillRefusedAfterTargetShutdown": True, "relayEndpointRemapped": relay, "encryptedModelsAndChatPreserved": relay, "modelCalls": 0, "taskExecutions": 0,
               "limitation": "Idle first joint recovery only; no pending queue, unknown operation, in-flight recovery, cross-version migration or model-quality result"}
     write_private(evidence / "result.json", report)
     write_private(evidence / "stage.json", {"stage": "passed"})
     return report
 
 
-def run(backend, pg_bin, valkey, node, evidence, *, resume=False):
+def run(backend, pg_bin, valkey, node, evidence, *, resume=False, relay=False):
     if not resume:
         if evidence.exists():
             raise RuntimeError("Evidence exists; inspect actual stage and explicitly resume, never repeat setup")
         evidence.mkdir(parents=True, mode=0o700)
-        prepare(backend, pg_bin, valkey, node, evidence)
+        prepare(backend, pg_bin, valkey, node, evidence, relay=relay)
     stage = read_private(evidence / "stage.json")["stage"]
     if stage == "prepared":
         backup_restore(backend, pg_bin, valkey, node, evidence)
@@ -316,4 +335,4 @@ def run(backend, pg_bin, valkey, node, evidence, *, resume=False):
 
 
 if __name__ == "__main__":
-    print(json.dumps(run(*[Path(p).resolve() for p in sys.argv[1:6]], resume="--resume" in sys.argv[6:])))
+    print(json.dumps(run(*[Path(p).resolve() for p in sys.argv[1:6]], resume="--resume" in sys.argv[6:], relay="--relay" in sys.argv[6:])))

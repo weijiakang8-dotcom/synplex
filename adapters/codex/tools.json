@@ -220,6 +220,10 @@
         },
         "executionOptions": {
           "$ref": "#/$defs/ExecutionOptions"
+        },
+        "conversationId": {
+          "type": "string",
+          "format": "uuid"
         }
       },
       "required": [

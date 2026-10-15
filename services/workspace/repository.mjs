@@ -1,3 +1,10 @@
+import {OBSIDIAN_SOURCE,readNoteIdentity} from '../../public/obsidian-notes.js';
+import {frozenCallAccounting} from './model-pricing.mjs';
+import {ModelRelayStore} from './model-relay-store.mjs';
+import {ModelRelay} from './model-relay.mjs';
+import {ChatStore,scopedChat} from './chat-store.mjs';
+import {ModelVault} from './model-vault.mjs';
+import {ModelService} from './model-service.mjs';
 import {followupRequest,followupHistory,followupInput} from './task-followup.mjs';
 import {validateResultAdoption,resultAdoption} from './result-adoption.mjs';
 import {readExecutionStatus,prepareExecutionStatus} from './execution-status.mjs';
@@ -48,6 +55,10 @@ function checkMeta(meta) {
 // Only the trusted service can mint credentials; no HTTP or MCP operation exposes this method.
 export class WorkspaceRepository {
   #db;
+  #chatStore;
+  #modelVault;
+  #modelService;
+  #relayStore;
   #auth = new WeakMap();
   #prices=[];
   #limits=null;
@@ -69,6 +80,11 @@ export class WorkspaceRepository {
     this.#db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(1, now());
     prepareExecutionStatus(this.#db);
     try{this.#search=new SearchIndex(this.#db);this.#memory=new MemoryProjection(this.#db);}catch(error){this.#db.close();throw error;}
+    this.#chatStore=new ChatStore(this.#db);
+    this.#chatStore.interrupt();
+    this.#modelVault=new ModelVault(this.#db,dir);
+    this.#modelService=new ModelService(this,this.#db);
+    this.#relayStore=new ModelRelayStore(this.#db,dir);this.#relayStore.interrupt();
     this.fault = fault;
     const priceFile=join(dir,'prices.json');
     try{
@@ -144,6 +160,9 @@ export class WorkspaceRepository {
     if (typeof token !== 'string' || token.length > 256) denied();
     const row = this.#db.prepare('SELECT c.*,s.owner_id,s.scope_json,s.permission_revision AS current_revision FROM credentials c JOIN scopes s USING(partition) WHERE token_hash=?')
       .get(sha256(Buffer.from(token)));
+    return this.#credentialAuth(row);
+  }
+  #credentialAuth(row){
     if (!row || row.revoked || row.permission_revision !== row.current_revision) denied();
     const auth = Object.freeze({ ownerId: row.owner_id, actorId: row.actor_id,
       permissionRevision: row.current_revision, authorizedScope: Object.freeze(JSON.parse(row.scope_json)),
@@ -151,6 +170,42 @@ export class WorkspaceRepository {
     this.#auth.set(auth, row.id);
     return auth;
   }
+  modelRelay(options={}){return new ModelRelay({repository:this,store:this.#relayStore,...options});}
+  executionModelAccess(auth,scope){
+    this.#currentAuth(auth,scope,'execute');if(auth.kind!=='ui')denied();
+    return {credentialId:this.#auth.get(auth),models:this.models(auth,scope)};
+  }
+  resumeExecutionModelAccess(credentialId,scope){
+    const row=this.#db.prepare('SELECT c.*,s.owner_id,s.scope_json,s.permission_revision AS current_revision FROM credentials c JOIN scopes s USING(partition) WHERE c.id=?').get(credentialId);
+    const auth=this.#credentialAuth(row);return {auth,...this.executionModelAccess(auth,scope)};
+  }
+  checkExecutionModelOwner(auth,scope,credentialId){
+    const current=this.#currentAuth(auth,scope,'execute');if(current.kind!=='ui')denied();
+    const row=this.#db.prepare('SELECT c.actor_id,c.partition,s.owner_id FROM credentials c JOIN scopes s USING(partition) WHERE c.id=?').get(credentialId);
+    if(!row||row.partition!==current.partition||row.owner_id!==current.ownerId||row.actor_id!==current.actorId)denied();
+  }
+  chat(auth,scope){
+    const check=(capability='read_memory')=>{const t=this.#currentAuth(auth,scope,capability);if(t.kind!=='ui')denied();return t;};
+    check();
+    return scopedChat(this.#chatStore,{check,release:id=>this.#modelVault.release(auth,id),verifyBackground:background=>{
+      const state=this.state(auth,scope);
+      if(state.stateRevision!==background.stateRevision||state.permissionRevision!==background.permissionRevision)fail('stale_context','参考资料已经变化，本次还没有发送给模型。','查看最新资料后重新准备。');
+    }});
+  }
+  models(auth,scope){
+    this.#currentAuth(auth,scope,'review_memory');
+    if(auth.kind!=='ui')denied();
+    const vault=this.#modelVault;
+    const check=()=>this.#currentAuth(auth,scope,'review_memory');
+    return {
+      list(){check();return vault.list(auth);},
+      save(input,admin=false){check();return vault.save(auth,input,admin);},
+      change(input,admin=false){check();return vault.change(auth,input,admin);},
+      acquire(selection,id,options){check();return vault.acquire(auth,selection,id,options);},
+      release(id){check();return vault.release(auth,id);},
+    };
+  }
+  async modelOperation(auth,input,action,options){return this.#modelService.call(auth,input,action,options);}
   revokeCredential(id) {
     this.#transaction(() => {
       const row = this.#db.prepare('SELECT partition FROM credentials WHERE id=?').get(id);
@@ -204,17 +259,21 @@ export class WorkspaceRepository {
       json_extract(body_json,'$.coverage.status') AS status,json_array_length(body_json,'$.coverage.gaps') AS gapCount,json_array_length(body_json,'$.blocks') AS blockCount
       FROM records WHERE partition=? AND kind='parsed' AND json_extract(body_json,'$.sourceId') IN (SELECT value FROM json_each(?)) ORDER BY rowid`).all(partition,JSON.stringify(sourceIds));
   }
+  #modelCallCosts(partition){
+    const grouped=Map.groupBy(this.#relayStore.accounting(partition),c=>c.attemptId);
+    return Object.fromEntries([...grouped].map(([id,calls])=>[id,frozenCallAccounting(calls)]));
+  }
   usageLedger(auth,scope){
     const {partition}=this.#currentAuth(auth,scope,'read_memory');
     return usageLedger({attempts:this.#list(partition,'attempt'),results:this.#list(partition,'result'),
-      reconciliations:this.#list(partition,'usage_reconciliation'),prices:this.#prices});
+      reconciliations:this.#list(partition,'usage_reconciliation'),prices:this.#prices,modelCallCosts:this.#modelCallCosts(partition)});
   }
   #budget(ownerId,claimingId=null){
     if(!this.#limits)return null;
     const partitions=this.#db.prepare('SELECT partition FROM scopes WHERE owner_id=?').all(ownerId).map(s=>s.partition);
     const holds=[],rows=[];
     for(const p of partitions){
-      rows.push(...usageLedger({attempts:this.#list(p,'attempt'),results:this.#list(p,'result'),reconciliations:this.#list(p,'usage_reconciliation'),prices:this.#prices}).rows);
+      rows.push(...usageLedger({attempts:this.#list(p,'attempt'),results:this.#list(p,'result'),reconciliations:this.#list(p,'usage_reconciliation'),prices:this.#prices,modelCallCosts:this.#modelCallCosts(p)}).rows);
       for(const h of this.#list(p,'budget_hold')){
         const job=this.#get(p,'execution_job',h.id),op=this.#get(p,'operation',h.id);
         holds.push({...h,...(h.id===claimingId?{startedAt:now()}:{}),notSubmitted:!!job&&job.claimId===null&&op?.executionStatus==='not_started'&&['cancelled','failed','needs_input'].includes(op.status)});
@@ -769,11 +828,41 @@ export class WorkspaceRepository {
       return { ownerId: trusted.ownerId, scope, kind, operation, result: operation.resultId ? this.#get(trusted.partition, 'import_result', operation.resultId) : null };
     })).body;
   }
+  obsidianNotes(auth,scope){
+    const {partition}=this.#currentAuth(auth,scope,'read_memory');
+    const rows=this.#db.prepare(`SELECT j.body_json, o.body_json AS operation FROM records j
+      JOIN records o ON o.partition=j.partition AND o.kind='operation' AND o.id=j.id
+      WHERE j.partition=? AND j.kind='import_job' AND json_extract(j.body_json,'$.metadata.sourceSystem')=?
+      ORDER BY j.rowid DESC LIMIT 1001`).all(partition,OBSIDIAN_SOURCE);
+    const selected=new Map();
+    for(const row of rows.slice(0,1000)){
+      const job=JSON.parse(row.body_json),identity=readNoteIdentity(job.metadata.sessionId);if(!identity)continue;
+      const key=JSON.stringify(identity),previous=selected.get(key);
+      const source=this.#get(partition,'source',job.sourceId),operation=JSON.parse(row.operation);
+      if(!source)continue;
+      const locked=!!this.#get(partition,'source_metadata',source.id)?.locked;
+      // Keep the newest readable snapshot as the link target. A later failed
+      // import must not hide a previously readable note or its edit lock.
+      if(!previous||!['succeeded','needs_input'].includes(previous.status)&&['succeeded','needs_input'].includes(operation.status))
+        selected.set(key,{...identity,sourceId:source.id,sha256:source.sha256,operationId:job.id,status:operation.status,locked:locked||!!previous?.locked});
+      else if(locked)previous.locked=true;
+    }
+    return {items:[...selected.values()],complete:rows.length<=1000};
+  }
   admitImport(auth, request, bytes) {
     validateWire('ImportMetadataRequest', request);
     if (!(bytes instanceof Uint8Array) || bytes.byteLength > 64 * 1024 * 1024) fail('validation_failed', '原件超过64MiB。', '明确拆分后再导入。');
+    if(request.sourceSystem===OBSIDIAN_SOURCE&&(!readNoteIdentity(request.sessionId)||request.format!=='text/markdown'||request.formatVersion!=='1'||bytes.byteLength>2*1024*1024))fail('validation_failed','笔记内容或位置无法读取。','每份笔记不超过2兆，请重新选择笔记库内的文件。');
     return this.#mutate(auth, request.scope, 'import_source', { request: { ...request, expectedStateRevision: 0 }, rawHash: sha256(bytes) },
       { requestId: request.requestId, expectedStateRevision: request.expectedStateRevision }, 'write_memory', false, (trusted, id) => {
+        if(request.sourceSystem===OBSIDIAN_SOURCE){
+          const identity=readNoteIdentity(request.sessionId),locked=this.#db.prepare(`SELECT json_extract(j.body_json,'$.sourceId') source_id
+            FROM records j JOIN records m ON m.partition=j.partition AND m.kind='source_metadata' AND m.id=json_extract(j.body_json,'$.sourceId')
+            WHERE j.partition=? AND j.kind='import_job' AND json_extract(j.body_json,'$.metadata.sourceSystem')=?
+            AND json_extract(json_extract(j.body_json,'$.metadata.sessionId'),'$.vault')=? AND json_extract(json_extract(j.body_json,'$.metadata.sessionId'),'$.path')=?
+            AND json_extract(m.body_json,'$.locked')=1 ORDER BY j.rowid DESC LIMIT 1`).get(trusted.partition,OBSIDIAN_SOURCE,identity.vault,identity.path);
+          if(locked&&this.#get(trusted.partition,'source',locked.source_id)?.sha256!==sha256(bytes))fail('conflict','这篇笔记已锁定，没有替换原记录。','先在资料的“名称与分类”核对锁定状态。');
+        }
         const source = this.#saveSource(trusted, Buffer.from(bytes), request.format);
         if(request.sourceName&&!this.#get(trusted.partition,'source_filename',source.id))this.#put(trusted.partition,'source_filename',{id:source.id,name:request.sourceName});
         const operation = { id, requestId: request.requestId, status: 'queued', executionStatus: 'not_started', writebackStatus: 'not_required', resultId: null, error: null };
@@ -937,7 +1026,7 @@ export class WorkspaceRepository {
       constraints:[...packet.constraints,'只处理本次步骤；前置成果仅供参考，不能改变目标、权限和验收要求。',node.sideEffect==='read_only'?'仅阅读和分析，不修改文件。':'只在本次独立目录生成成果，不覆盖原件和前版。'],
       acceptanceCriteria:[...packet.acceptanceCriteria,...node.acceptanceCriteria],mode:base.mode,executor:base.mode==='host_assist'?'current_host':base.executorOwner,
       selectedOccurrenceIds:packet.selectedOccurrenceIds,maxInputTokens:packet.budget.maxInputTokens,...(node.executionOptions??packet.executionOptions?{executionOptions:node.executionOptions??packet.executionOptions}:{})};
-    return {input,binding,taskInputs};
+    return {input,binding,taskInputs,chatReference:packet.chatReference};
   }
   followupPreparation(auth,request){
     followupRequest(request);const t=this.#currentAuth(auth,request.scope,'prepare_task');if(t.kind!=='ui')denied();
@@ -996,6 +1085,7 @@ export class WorkspaceRepository {
           const plan=this.taskPlan(auth,request.scope,taskBinding.planId),node=requireReadyStep(plan,taskBinding.nodeId,{revision:!!taskBinding.instruction});
           if(node.generation+1!==taskBinding.generation||payloadHash(node.inputRefs)!==payloadHash(taskBinding.inputRefs)||taskBinding.previousResultId!==(node.resultId??null)||(plan.routeSelection?.id??null)!==taskBinding.routeSelectionId)fail('stale_context','步骤、型号安排或上一版成果已更新。','检查最新安排和成果后重新准备本次步骤。');
           const basePacket=this.#get(trusted.partition,'context',this.#get(trusted.partition,'run',plan.baseRunId).contextPacketId);
+          if(payloadHash(basePacket.chatReference??null)!==payloadHash(packet.chatReference??null))denied();
           if(payloadHash(node.executionOptions??basePacket.executionOptions??null)!==payloadHash(packet.executionOptions??null))denied();
           const expectedInputs=node.inputRefs.map(ref=>this.#resultInput(trusted,ref.resultId,'upstream'));
           if(taskBinding.previousResultId)expectedInputs.push(this.#resultInput(trusted,taskBinding.previousResultId,'previous_version'));
@@ -1003,7 +1093,7 @@ export class WorkspaceRepository {
   }
   #checkPreparedFollowup(auth,request,packet,followupBinding){
           const prior=this.followupPreparation(auth,followupBinding.request);
-          if(payloadHash(prior.binding)!==payloadHash(followupBinding.binding)||payloadHash(prior.input)!==payloadHash(request)||payloadHash(prior.taskInputs)!==payloadHash(packet.taskInputs??[]))denied();
+          if(payloadHash(prior.chatReference??null)!==payloadHash(packet.chatReference??null)||payloadHash(prior.binding)!==payloadHash(followupBinding.binding)||payloadHash(prior.input)!==payloadHash(request)||payloadHash(prior.taskInputs)!==payloadHash(packet.taskInputs??[]))denied();
   }
   registerPrepared(auth, request, packet, taskBinding=null, followupBinding=null) {
     validatePrepare(request); validateWire('ContextPacket', packet);
@@ -1025,6 +1115,10 @@ export class WorkspaceRepository {
           const permittedTypes = { facts: ['fact','decision'], failures: ['failure'], lessons: ['lesson'] };
           if (list !== 'candidates' && (claim.reviewStatus !== 'confirmed' || claim.lifecycle !== 'active' || !permittedTypes[list].includes(claim.type))) fail('conflict', '待核对或历史记录不能冒充当前事实。', '分开待核对、历史和当前事实。');
         }
+        if(request.conversationId){
+          const reference=this.chat(auth,request.scope).snapshot(request.conversationId);
+          if(payloadHash(reference)!==payloadHash(packet.chatReference??null))fail('stale_context','这段对话已更新。','查看最新对话后再准备任务。');
+        }else if(packet.chatReference&&!taskBinding&&!followupBinding)denied();
         if(taskBinding)this.#checkPreparedStep(auth,request,packet,taskBinding,trusted);
         else if(followupBinding)this.#checkPreparedFollowup(auth,request,packet,followupBinding);
         else if(packet.taskInputs?.length)denied();
@@ -1529,6 +1623,7 @@ export class ScopedRepository {
   #auth;
   constructor(repository, auth, scope) { this.#repository = repository; this.#auth = auth; this.scope = Object.freeze(scope); Object.freeze(this); }
   async getState() { return this.#repository.state(this.#auth, this.scope); }
+  async getClaimJourney(id) { return this.#repository.claimDetail(this.#auth,this.scope,id); }
   async taskConflicts(selectedOccurrenceIds) { return this.#repository.taskConflicts(this.#auth, this.scope, selectedOccurrenceIds); }
   async saveBlob(input, meta) { return this.#repository.saveBlob(this.#auth, this.scope, input, meta); }
   async getBlob(id) { return this.#repository.getBlob(this.#auth, this.scope, id); }

@@ -1,7 +1,7 @@
 <p align="center"><img src="public/logo-mark.png" width="80" alt="Synplex"></p>
 <h1 align="center">Synplex</h1>
 <p align="center"><strong>把模糊问题变成有依据的结构化系统。</strong></p>
-<p align="center">记住为什么这样做，带着依据继续，把项目真正做下去。</p>
+<p align="center">一个能记住用户项目经历、协同 AI 执行并核对成果的工作台。</p>
 <p align="center"><a href="https://synplex.xyz">网站</a> · <a href="docs/INSTALLATION.md">开始使用</a> · <a href="docs/USER_GUIDE.md">使用指南</a> · <a href="docs/EXTENSIONS.md">连接 Codex / DeepSeek Harness</a> · <a href="https://github.com/weijiakang8-dotcom/synplex/issues">反馈</a></p>
 
 ---
@@ -16,9 +16,11 @@ Synplex 把资料、决定、任务和成果放进同一个项目。重要记录
 
 | 你要做的事 | Synplex 帮你完成 |
 |---|---|
+| 连续聊天 | 在任务里切换对话，使用项目背景、自己选模型，保留消息与来源 |
+| 连接自己的模型 | 填地址与密钥后获取可用型号；个人连接和内置模型分开 |
 | 换工具继续项目 | 从已确认记录和原文准备完整工作说明，交给当前使用的工具 |
-| 整理零散资料 | 导入文字、文档和会话记录；保留原件，按分类与标签查找 |
-| 记住重要转折 | 回看修改原因、处理经过和当前结论，直接打开对应出处 |
+| 整理零散资料 | 导入文字、文档和会话；从 Obsidian 勾选笔记，保留原件和双链，按分类与标签查找 |
+| 记住重要转折 | 回看修改原因、处理经过和当前结论；把有出处的变化带入下一次任务 |
 | 把任务拆清楚 | 明确目标、限制、步骤依赖和验收条件；前一步变化时提醒重新核对 |
 | 执行并交付 | 配置执行工具后，由你明确开始；查看进度、补充回答、确认操作和下载成果 |
 | 修改已有成果 | 保留前版文件与原要求，提出修改，比较版本，再核对是否达到目标 |
@@ -67,6 +69,7 @@ npm run build:release -- /absolute/path/to/new-release --engine-source vendor/ag
 | 文档 | 内容 |
 |---|---|
 | [安装与配置](docs/INSTALLATION.md) | 环境、启动、资料目录与自有执行引擎 |
+| [模型连接](docs/MODELS.md) | 获取型号、个人连接、内置模型与费用设置 |
 | [使用指南](docs/USER_GUIDE.md) | 从第一个项目到交付、修订与复盘 |
 | [扩展接入](docs/EXTENSIONS.md) | Codex / DeepSeek Harness 的打包与连接 |
 | [架构](docs/ARCHITECTURE.md) | 数据、状态、执行和权限边界 |

@@ -10,6 +10,7 @@ import {inspectDatabase} from '../../scripts/runtime/recovery.mjs';
 import {initializeInstallation,upgradeInstallation,rollbackInstallation,reconcileUpgrade,openInstallation} from '../../scripts/runtime/upgrade.mjs';
 import {payloadHash} from '../../packages/contracts/validate.mjs';
 import {spawnSync} from 'node:child_process';
+import {acquireWorkspaceLease} from '../../scripts/runtime/workspace-lease.mjs';
 
 test('坏升级在副本检查，原子切换中断按实际指针核对；回退只换兼容程序，不回滚新成果和费用记录',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'synplex-upgrade-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
@@ -25,7 +26,7 @@ test('坏升级在副本检查，原子切换中断按实际指针核对；回�
  const file=join(second,'public/index.html'),content=readFileSync(file);writeFileSync(file,'tampered');await assert.rejects(upgradeInstallation(manager,second),/被修改/);assert.equal(existsSync(join(manager,'.upgrade-lock')),false);writeFileSync(file,content);
  await assert.rejects(upgradeInstallation(manager,bad),/启动检查未通过/);assert.equal(state().current.path,first);assert.deepEqual(inspectDatabase(join(data,'workspace.sqlite')),baseline);assert.equal(reconcileUpgrade(manager).status,'not_switched');
  await assert.rejects(upgradeInstallation(manager,mutating),/改变了副本资料/);assert.equal(state().current.path,first);assert.deepEqual(inspectDatabase(join(data,'workspace.sqlite')),baseline);assert.equal(reconcileUpgrade(manager).status,'not_switched');
- await assert.rejects(upgradeInstallation(manager,second,{fault:phase=>{if(phase==='prepared'){assert.throws(()=>reconcileUpgrade(manager),/仍在运行/);throw Error('fixture interruption before switch');}}}),/before switch/);assert.equal(state().current.path,first);assert.equal(reconcileUpgrade(manager).status,'not_switched');
+ await assert.rejects(upgradeInstallation(manager,second,{fault:phase=>{if(phase==='prepared'){assert.throws(()=>acquireWorkspaceLease(data),/仍在使用或维护/);assert.throws(()=>reconcileUpgrade(manager),/仍在使用或维护|仍在运行/);throw Error('fixture interruption before switch');}}}),/before switch/);assert.equal(state().current.path,first);assert.equal(reconcileUpgrade(manager).status,'not_switched');
  await assert.rejects(upgradeInstallation(manager,second,{fault:phase=>{if(phase==='switched')throw Error('fixture interruption after switch');}}),/after switch/);assert.equal(state().current.path,second);await assert.rejects(openInstallation(manager,{openBrowser:false}),/尚未核对/);assert.equal(reconcileUpgrade(manager).status,'completed_after_interruption');
  await assert.rejects(upgradeInstallation(manager,second),/不重复/);
  // A later file and append-only cost evidence must survive rollback. This is
@@ -61,4 +62,30 @@ test('坏升级在副本检查，原子切换中断按实际指针核对；回�
  await assert.rejects(initializeInstallation(join(dir,'pre-handoff-manager'),approvalAware,data),/不能完整理解/);
  assert.equal(readFileSync(witness,'utf8'),'incomplete fixture');assert.equal(state().current.path,approvalAware);
  assert.deepEqual(inspectDatabase(join(data,'workspace.sqlite')),beforeApprovalRollback);
+});
+
+test('联合产品在切换前核对目标执行环境，拒绝不兼容升级及回退，检查不泄漏私有错误',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'synplex-upgrade-engine-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const data=join(dir,'data'),manager=join(dir,'manager'),repo=new WorkspaceRepository({dataDir:data});repo.close();
+ mkdirSync(join(data,'connections'),{mode:0o700});writeFileSync(join(data,'connections/token'),'synthetic-only',{mode:0o600});
+ writeFileSync(join(data,'connection.json'),JSON.stringify({endpoint:'http://127.0.0.1:15996',scope:{projectId:'fixture',versionId:null,branchId:null},uiTokenFile:join(data,'connections/token'),agentTokenFile:join(data,'connections/token')}),{mode:0o600});
+ writeFileSync(join(data,'product-start.json'),'{}',{mode:0o600});const engine=join(dir,'engine-state');writeFileSync(engine,'1');
+ const release=(name,version)=>{
+  const source=join(dir,name+'-source');
+  const files={'package.json':'{}','package-lock.json':'{}','services/workspace/server.mjs':'','public/index.html':name,
+   'scripts/runtime/release.mjs':'','scripts/runtime/open.mjs':'',
+   'scripts/runtime/workspace.mjs':`if(!process.env.SYNPLEX_WORKSPACE_DATA_DIR.includes('probe'))throw Error('staged only');`,
+   'scripts/runtime/product.mjs':`import {readFileSync} from 'node:fs';export function productConfiguration({dataDir}){if(dataDir!==${JSON.stringify(data)}||process.env.SYNPLEX_TEST_NO_MODELS!=='1'||readFileSync(${JSON.stringify(engine)},'utf8')!==${JSON.stringify(version)})throw Error('fixture-private-key-never-show');}`};
+  for(const [path,text] of Object.entries(files)){mkdirSync(dirname(join(source,path)),{recursive:true});writeFileSync(join(source,path),text);}
+  const target=join(dir,name);buildRelease(target,{sourceRoot:source});return realpathSync(target);
+ };
+ const first=release('first','1'),second=release('second','1'),incompatible=release('incompatible','2');
+ const baseline=inspectDatabase(join(data,'workspace.sqlite'));
+ await assert.rejects(initializeInstallation(join(dir,'refused'),incompatible,data),error=>/执行环境不兼容/.test(error.message)&&!error.message.includes('fixture-private'));
+ assert.equal(existsSync(join(dir,'refused')),false);await initializeInstallation(manager,first,data);
+ const pointer=()=>readFileSync(join(manager,'installation.json'),'utf8');let before=pointer();
+ await assert.rejects(upgradeInstallation(manager,incompatible),/执行环境不兼容/);assert.equal(pointer(),before);assert.equal(existsSync(join(manager,'.upgrade-lock')),false);
+ await upgradeInstallation(manager,second);before=pointer();writeFileSync(engine,'2');
+ await assert.rejects(rollbackInstallation(manager),/执行环境不兼容/);assert.equal(pointer(),before);assert.equal(existsSync(join(manager,'.upgrade-lock')),false);
+ writeFileSync(engine,'1');await rollbackInstallation(manager);assert.equal(JSON.parse(pointer()).current.path,first);assert.deepEqual(inspectDatabase(join(data,'workspace.sqlite')),baseline);
 });

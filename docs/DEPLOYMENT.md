@@ -60,3 +60,21 @@ docker compose --env-file /private/path/deployment.env -f deploy/compose.yml exe
 由于现有 HTTPS 可能由宿主 Nginx、Docker Nginx 或其他代理提供，管理员需明确配置 `/etc/synplex/activate` 与 `/etc/synplex/rollback` 两个 root 管理、可执行的路由切换脚本，分别切向新版独立地址和恢复原路由。必须先验证代理能访问新版容器，不能假定容器内的 127.0.0.1 就是宿主。
 
 入口按 main SHA 拉取隔离源码、构建、停止自己的上一工作台、备份资料卷、启动新版、调用明确路由切换并验证公开版本。失败时尝试恢复上一程序与原路由；保留新旧数据，不降级数据库。首次现场安装与两份路由脚本必须按实际服务器演练，仓库静态检查不代表生产切换已验收。
+
+## 完整聊天与执行部署
+
+`deploy/Dockerfile.full` 与 `deploy/compose.full.yml` 包含 Node、锁定 Python 依赖、独立 PostgreSQL、Redis 7.0、API、worker 和网站代理，共用受控 loopback 网络；仅网站端口可由宿主访问。使用独立数据卷，不挂载旧生产卷或 Docker socket。模型仍须由管理员在网页明确添加。
+
+该配方已通过隔离 Linux 容器的真实构建、独立后台启动、认证、单次连接、跨站拒绝、资料核对和精确原件下载验证。它需要单独的数据卷；既有站点先完成资料迁移和真实代理验收，再切换路由。现有 `compose.yml` 的资料工作台形态继续保留，不能把它误作完整执行部署。公开首页仅放行 `/` 与明确的首页资产，私人工作台、接口、下载和扩展继续保留认证。
+
+
+使用完整部署配置时，将相同私有配置中的 `SYNPLEX_HTTP_PORT` 设为一个空闲本机端口（默认 5262）：
+
+```sh
+docker compose --project-name synplex-full --env-file /private/path/deployment.env -f deploy/compose.full.yml build
+docker compose --project-name synplex-full --env-file /private/path/deployment.env -f deploy/compose.full.yml up -d
+```
+
+完整部署的工作台资料位于容器内 `/var/lib/synplex/workspace`，执行后台与数据库位于同一私有卷中的独立目录。先登录受保护工作台，在“任务 → 模型设置”添加连接，再开始真实任务。维护者刷新一次性连接入口可用相同 Compose 命令的 `exec workspace node services/workspace/connect.mjs`，读取工作台子目录的入口。公开首页包含动态星空，并尊重系统的“减少动态效果”。
+
+目前 `deploy/deploy-synplex` 是既有资料工作台的受限发布入口；不能把它当成完整后台迁移器。完整部署首次切站需管理员按现场代理、私有配置和备份操作，不能只推送源码就宣称线上已有执行能力。CI 会构建并验证完整后台，不替代服务器的切流授权与模型设置。

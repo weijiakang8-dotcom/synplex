@@ -1,5 +1,5 @@
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const effortNames={none:'不额外思考',minimal:'简短',low:'快速',medium:'适中',high:'深入',xhigh:'更深入',max:'充分',ultra:'最深入'};
+const effortNames={default:'默认',none:'不额外思考',minimal:'简短',low:'快速',medium:'适中',high:'深入',xhigh:'更深入',max:'充分',ultra:'最深入'};
 export const effortLabel=value=>effortNames[value]||'所选程度';
 export function effortOptions(efforts,value){
  const invalid=!!value&&!efforts.includes(value);

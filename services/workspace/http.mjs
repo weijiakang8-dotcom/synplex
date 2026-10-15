@@ -1,6 +1,10 @@
-import {uiSessionCookie} from './public-access.mjs';
+import {handleModelLedgerRoute} from './model-ledger-routes.mjs';
+import {handleModelRelay} from './model-relay-http.mjs';
+import {createChatRoutes} from './chat-routes.mjs';
+import {uiSessionCookie,uiSessionCookieName} from './public-access.mjs';
 import {beginRequestTrace,diagnosticStatus} from './diagnostics.mjs';
 import {handleReadRoute} from './read-routes.mjs';
+import {handleModelRoute} from './model-routes.mjs';
 import {createExpressionLinks} from './expression-links.mjs';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -79,18 +83,36 @@ function resultSelectionRoute(path,auth,input,repository){
  if(path!=='/api/v1/ui_adopt_task_result')return null;if(auth.kind!=='ui')throw denied();
  return repository.adoptTaskResult(auth,input).value;
 }
+async function servePrivateRoute({req,res,path,url,relay,expressionLinks}){
+  return await handleModelRelay({req,res,path,relay,parseJSON,send})||expressionLinks.handle(req,res,url);
+}
+
 async function serveUiRoute(context,res,expressionLinks){
   const mutation=expressionLinks.mutate(context.path,context.auth,context.input);
-  const reply=mutation??await handleReadRoute(context);if(!reply)return false;
+  const reply=mutation??handleModelLedgerRoute(context)??await handleModelRoute(context)??await context.chatRoutes.handle(context)??await handleReadRoute(context);if(!reply)return false;
   if(reply.bytes){res.writeHead(200,reply.headers);res.end(reply.bytes);}
   else send(res,reply.status??200,reply.body);
   return true;
 }
 
-export function createWorkspaceServer({repository,modules={},publicDir=null,allowedOrigins=[],secureCookies=false,buildSha=null,importTimeoutMs=300_000,localProjects=null,execution=null,diagnostics=null}) {
+async function servePublicPage({req,res,path,publicDir,publicLanding}){
+      if(req.method!=='GET'||path.startsWith('/api/')||!publicDir)return false;
+        let relative;try{relative=decodeURIComponent(path==='/'?(publicLanding?'/home/index.html':'/index.html'):path==='/app'||path==='/app/'?'/index.html':path);}catch{throw wireFail('validation_failed','页面路径无效。','使用工作台入口。');}
+        const root=resolve(publicDir),file=resolve(root,`.${relative}`);
+        if(!file.startsWith(root+sep)) throw denied();
+        const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.png':'image/png','.svg':'image/svg+xml'};
+        if(!types[extname(file)]) throw denied();
+        try{
+          const bytes=await readFile(file);res.writeHead(200,{'Content-Type':types[extname(file)],'X-Content-Type-Options':'nosniff',
+            'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"});res.end(bytes);return true;
+        }catch(error){if(error.code==='ENOENT'){send(res,404,{error:'页面不存在。'});return true;}throw error;}
+      }
+
+export function createWorkspaceServer({repository,modules={},publicDir=null,allowedOrigins=[],secureCookies=false,buildSha=null,importTimeoutMs=300_000,localProjects=null,execution=null,diagnostics=null,modelAdmin=null,chatTransport=undefined,modelRelay=null,publicLanding=false}) {
   const service=new WorkspaceService({repository,modules,importTimeoutMs});
   const expressionLinks=createExpressionLinks(repository);
-  const capabilityInfo=()=>({...service.capabilities(),execution:!!execution?.executors().length,executors:execution?.executors()??[]});
+  const chatRoutes=createChatRoutes({repository,execution,transport:chatTransport});
+  const capabilityInfo=(auth=null,scope=null)=>({...service.capabilities(),modelConnections:true,chat:true,execution:!!execution?.executors().length,executors:execution?.executors(auth,scope)??[]});
   const pairings=new Map(),sessions=new Map();
   const pairingDenied=()=>{const error=denied();error.uiPairing=true;return error;};
   async function createUiPairing(auth,scope,rootAuth=auth){
@@ -101,7 +123,8 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
     return {nonce,endpoint:`http://127.0.0.1:${server.address().port}`};
   }
   function session(req){
-    const id=(req.headers.cookie??'').split(';').map(x=>x.trim()).find(x=>x.startsWith('synplex_ui='))?.slice(11);
+    const prefix=uiSessionCookieName(server.address().port)+'=';
+    const id=(req.headers.cookie??'').split(';').map(x=>x.trim()).find(x=>x.startsWith(prefix))?.slice(prefix.length);
     const s=sessions.get(id);if(!s||s.expiresAt<Date.now()){sessions.delete(id);return null;}return s;
   }
   const server=http.createServer(async (req,res)=>{
@@ -110,18 +133,8 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
       strictLocal(req,server,allowedOrigins);
       const url=new URL(req.url,`http://${req.headers.host}`),path=url.pathname;
       if(req.method==='GET'&&path==='/health') return send(res,200,{ok:true,protocolVersion:PROTOCOL_VERSION,mode:'isolated-local-workspace',buildSha});
-      if(expressionLinks.handle(req,res,url))return;
-      if(req.method==='GET'&&!path.startsWith('/api/')&&publicDir) {
-        let relative;try{relative=decodeURIComponent(path==='/'?'/index.html':path);}catch{throw wireFail('validation_failed','页面路径无效。','使用工作台入口。');}
-        const root=resolve(publicDir),file=resolve(root,`.${relative}`);
-        if(!file.startsWith(root+sep)) throw denied();
-        const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.png':'image/png','.svg':'image/svg+xml'};
-        if(!types[extname(file)]) throw denied();
-        try{
-          const bytes=await readFile(file);res.writeHead(200,{'Content-Type':types[extname(file)],'X-Content-Type-Options':'nosniff',
-            'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"});res.end(bytes);return;
-        }catch(error){if(error.code==='ENOENT')return send(res,404,{error:'页面不存在。'});throw error;}
-      }
+      if(await servePrivateRoute({req,res,path,url,relay:modelRelay,expressionLinks}))return;
+      if(await servePublicPage({req,res,path,publicDir,publicLanding}))return;
       if(!path.startsWith('/api/v1/'))return send(res,404,{error:'接口不存在。'});
       if(req.method==='POST'&&path==='/api/v1/ui_pair'){
         if(!/^application\/x-www-form-urlencoded(?:;|$)/i.test(req.headers['content-type']??''))throw denied();
@@ -132,8 +145,8 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         await repository.forScope(entry.auth,entry.scope);
         pairings.delete(nonce);const id=randomBytes(32).toString('hex');
         sessions.set(id,{auth:entry.auth,rootAuth:entry.rootAuth,scope:entry.scope,expiresAt:Date.now()+8*3600_000});
-        res.writeHead(303,{'Location':'/','Cache-Control':'no-store','Referrer-Policy':'no-referrer',
-          'Set-Cookie':uiSessionCookie(id,{secureCookies})});res.end();return;
+        res.writeHead(303,{'Location':publicLanding?'/app':'/','Cache-Control':'no-store','Referrer-Policy':'no-referrer',
+          'Set-Cookie':uiSessionCookie(id,{secureCookies,port:server.address().port})});res.end();return;
       }
       const header=req.headers.authorization;
       const uiSession=session(req);
@@ -143,13 +156,13 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
       if(req.method==='GET'&&path==='/api/v1/ui_bootstrap'){
         if(!uiSession||auth.kind!=='ui')throw denied();
         const repo=await repository.forScope(auth,uiSession.scope);
-        return send(res,200,{scope:uiSession.scope,state:await repo.getState(),capabilities:capabilityInfo(),projects:localProjects?await localProjects.list(uiSession.rootAuth):null});
+        return send(res,200,{scope:uiSession.scope,state:await repo.getState(),capabilities:capabilityInfo(auth,uiSession.scope),projects:localProjects?await localProjects.list(uiSession.rootAuth):null});
       }
       if(req.method==='POST'&&path==='/api/v1/ui_logout'){
         if(uiSession){for(const [id,s] of sessions)if(s===uiSession)sessions.delete(id);}
-        return send(res,200,{ok:true},{'Set-Cookie':uiSessionCookie('',{secureCookies,maxAge:0})});
+        return send(res,200,{ok:true},{'Set-Cookie':uiSessionCookie('',{secureCookies,maxAge:0,port:server.address().port})});
       }
-      if(req.method==='GET'&&path==='/api/v1/capabilities')return send(res,200,capabilityInfo());
+      if(req.method==='GET'&&path==='/api/v1/capabilities')return send(res,200,capabilityInfo(auth,auth.authorizedScope));
       if(req.method!=='POST')return send(res,405,{error:'请使用POST。'},{Allow:'POST'});
       const declared=req.headers['content-length'];
       const limit=['/api/v1/import_source','/api/v1/ui_verify_artifact'].includes(path)?67*MiB:2*MiB;
@@ -178,7 +191,7 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         const selected=await localProjects.launch(auth,input.scope);
         return send(res,200,await createUiPairing(selected.auth,selected.scope,localProjects.rootAuth));
       }
-      if(await serveUiRoute({path,repository,auth,input},res,expressionLinks))return;
+      if(await serveUiRoute({path,repository,auth,input,modelAdmin,chatRoutes,modelRelay},res,expressionLinks))return;
 
       if(path==='/api/v1/ui_review_result'){
         if(auth.kind!=='ui')throw denied();return send(res,200,repository.reviewResult(auth,input).value);
@@ -204,10 +217,10 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         if(auth.kind!=='ui')throw denied();return send(res,202,await service.startPlanStep(auth,input,execution));
       }
       if(path==='/api/v1/ui_task_routes'){
-        if(auth.kind!=='ui')throw denied();return send(res,200,repository.quoteTaskRoutes(auth,input,execution?.executors()??[]));
+        if(auth.kind!=='ui')throw denied();return send(res,200,repository.quoteTaskRoutes(auth,input,execution?.executors(auth,input.scope)??[]));
       }
       if(path==='/api/v1/ui_select_task_route'){
-        if(auth.kind!=='ui')throw denied();return send(res,200,repository.selectTaskRoute(auth,input,execution?.executors()??[]));
+        if(auth.kind!=='ui')throw denied();return send(res,200,repository.selectTaskRoute(auth,input,execution?.executors(auth,input.scope)??[]));
       }
 
       if(path==='/api/v1/ui_resolve_conflict'){
@@ -274,9 +287,10 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         const conflicts=repository.conflictDetails(auth,input.scope);
         const usage=repository.usageLedger(auth,input.scope),budget=repository.budgetStatus(auth,input.scope);
         const taskPlans=repository.recent(auth,input.scope,'task_plan',30).map(p=>repository.taskPlan(auth,input.scope,p.id));
+        const modelCalls=Object.fromEntries(executions.map(x=>[x.operation.id,modelRelay?.calls(auth,input.scope,x.operation.id)??[]]));
         const taskSteps=repository.recent(auth,input.scope,'task_step',100);
         const sourceMetadata=sources.map(s=>repository.sourceMetadata(auth,input.scope,s.id));
-        return send(res,200,{state,claims,sources,sourceCoverage,events,runs,results,totals,artifactFiles,resultReviews,resultRequirements,executions,latestWork,conflicts,usage,budget,taskPlans,taskSteps,sourceMetadata,sourcePreviewPages:true,materialQuestions:true,taskFollowups:true,taskResultAdoption:true,claimVersionActions:true,materialBriefs:true,recordJourney:true,resultVersionActions:true,artifactPreviews:true,noteExports:true,projectExpressions:true,projectExpressionVersions:true,executionStatus:repository.executionStatus(auth,input.scope),diagnostics:diagnosticStatus(diagnostics)});
+        return send(res,200,{state,claims,sources,sourceCoverage,events,runs,results,totals,modelCalls,artifactFiles,resultReviews,resultRequirements,executions,latestWork,conflicts,usage,budget,taskPlans,taskSteps,sourceMetadata,sourcePreviewPages:true,materialQuestions:true,taskFollowups:true,taskResultAdoption:true,claimVersionActions:true,materialBriefs:true,recordJourney:true,resultVersionActions:true,artifactPreviews:true,noteExports:true,projectExpressions:true,projectExpressionVersions:true,executionStatus:repository.executionStatus(auth,input.scope),diagnostics:diagnosticStatus(diagnostics)});
       }
       if(path==='/api/v1/ui_reconcile_usage'){
         if(auth.kind!=='ui')throw denied();
@@ -315,5 +329,5 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
   return {server,service,capabilities:capabilityInfo,createUiPairing,listen:async(port=0)=>{
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.off('error',reject);resolve();});});
     return `http://127.0.0.1:${server.address().port}`;
-  },close:async()=>{await execution?.close();await service.idle();if(server.listening)await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
+  },close:async()=>{await chatRoutes.close();await modelRelay?.close();await execution?.close();await service.idle();if(server.listening)await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
 }

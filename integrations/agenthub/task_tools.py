@@ -324,11 +324,13 @@ def install():
     for tool_, handler in [(read_task_file, run_read), (summarize_table, run_table), (check_task_code, run_code_check), *checks]:
         register_tool(tool_.name, tool_.description, tool_.args_schema.model_json_schema(), handler,
                       timeout=30, requires_approval=False, side_effect=False)
-    for name in ("general", "analysis", "writing"):
+    for name in ("general", "analysis", "writing", "document"):
         capability = CAPABILITIES[name]
         tools = tuple(t for t in capability.tools if t.name not in {"read_task_file", "summarize_table", "check_task_code", "test_task_python"})
         added = (read_task_file, summarize_table, check_task_code, *(t for t, _ in checks)) if name != "writing" else (read_task_file, summarize_table)
-        CAPABILITIES[name] = replace(capability, tools=tools + added)
+        # Document revisions need the same scoped, fingerprint-checked source
+        # reader. Do not grant code execution or spreadsheet tools here.
+        CAPABILITIES[name] = replace(capability, tools=tools + ((read_task_file,) if name == "document" else added))
     service.MIME_TYPES["csv"] = "text/csv; charset=utf-8"
     if not getattr(service.verify_artifact, "synplex_csv", False):
         original = service.verify_artifact

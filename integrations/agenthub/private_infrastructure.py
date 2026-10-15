@@ -123,7 +123,7 @@ class OwnedInfrastructure:
         available(data["redis_port"])
         if data.get("infrastructure_id") != self.config["id"]:
             raise RuntimeError("Queue belongs to another infrastructure")
-        child = self._start([str(Path(binary).resolve()), str(state / "valkey.conf")], state / "queue.log")
+        child = self._start([str(Path(binary).absolute()), str(state / "valkey.conf")], state / "queue.log")
         client = Redis(host="127.0.0.1", port=data["redis_port"], password=data["redis_password"],
                        socket_connect_timeout=1, socket_timeout=1)
         try:

@@ -1,7 +1,8 @@
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import {sha256} from './hash.mjs';
+export {sha256,payloadHash} from './hash.mjs';
 
 export const PROTOCOL_VERSION = 'synplex.workspace/1.0.0';
 export const schema = JSON.parse(readFileSync(new URL('./workspace.schema.json', import.meta.url), 'utf8'));
@@ -28,14 +29,6 @@ export function validateWire(type, value) {
   return value;
 }
 
-export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-function canonical(value) {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])]));
-  return value;
-}
-// Called only after schema validation on JSON values; array order remains significant.
-export const payloadHash = value => sha256(Buffer.from(JSON.stringify(canonical(value)), 'utf8'));
 
 export function validateUsage(usage) {
   validateWire('Usage', usage);

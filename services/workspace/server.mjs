@@ -1,3 +1,4 @@
+import {initialConnection} from './initial-connection.mjs';
 import {publicAccessOptions,buildInformation} from './public-access.mjs';
 import {createDiagnosticLog} from './diagnostics.mjs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, lstatSync } from 'node:fs';
@@ -29,22 +30,7 @@ process.once('exit',()=>workspaceLease.close());
 assertWorkspaceAdmission(dataDir);
 const repository=new WorkspaceRepository({dataDir});
 const connectionFile=join(dataDir,'connection.json');
-let connection;
-if(existsSync(connectionFile)) {
-  if(lstatSync(connectionFile).isSymbolicLink())throw new Error('请使用真实的连接文件，不能使用文件替身。');
-  connection=JSON.parse(readFileSync(connectionFile,'utf8'));
-  if(payloadHash(connection.scope)!==payloadHash(scope))throw new Error('已有资料属于其他项目，请为新项目选择独立的资料文件夹。');
-}else{
-  const capabilities=['read_memory','write_memory','prepare_task','record_result'];
-  const ui=repository.createCredential({ownerId:'local-owner',actorId:'local-human',scope,capabilities:[...capabilities,'review_memory'],kind:'ui'});
-  const agent=repository.createCredential({ownerId:'local-owner',actorId:'codex-host',scope,capabilities,kind:'agent'});
-  const credentialDir=join(dataDir,'connections');mkdirSync(credentialDir,{mode:0o700});
-  const uiTokenFile=join(credentialDir,'ui-token'),agentTokenFile=join(credentialDir,'codex-token');
-  writeFileSync(uiTokenFile,ui.token,{flag:'wx',mode:0o600});writeFileSync(agentTokenFile,agent.token,{flag:'wx',mode:0o600});
-  connection={endpoint:`http://127.0.0.1:${port}`,scope,uiTokenFile,agentTokenFile};
-  writeFileSync(connectionFile,JSON.stringify(connection,null,2),{flag:'wx',mode:0o600});
-}
-if(connection.endpoint!==`http://127.0.0.1:${port}`)throw new Error('已有连接使用不同的地址，请先核对设置，不要自动更改。');
+const connection=initialConnection(repository,{dataDir,scope,port});
 const modules={};
 for(const name of ['ingestion','context','experience']) {
   const moduleFile=join(root,'packages',name,'index.mjs');
@@ -52,10 +38,11 @@ for(const name of ['ingestion','context','experience']) {
   if(existsSync(moduleFile))modules[name]=await import(fileURLToPath(new URL(`../../packages/${name}/index.mjs`,import.meta.url)));
 }
 const rootAuth=repository.authenticate(readFileSync(connection.uiTokenFile,'utf8').trim());
-const adapters=loadExecutors(dataDir),execution=new ExecutionCoordinator({repository,adapters});
+const modelRelay=repository.modelRelay();
+const adapters=loadExecutors(dataDir,{relay:modelRelay,relayEndpoint:connection.endpoint+'/internal/model/v1'}),execution=new ExecutionCoordinator({repository,adapters});
 const localProjects=process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'?new LocalProjects({repository,dataDir,connection,rootAuth,allowExecution:!!execution.executors().length}):null;
 const diagnostics=createDiagnosticLog(dataDir);
-const app=createWorkspaceServer({repository,modules,localProjects,execution,diagnostics,...publicAccessOptions(),...buildInformation(),publicDir:process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'?join(root,'public'):null});
+const app=createWorkspaceServer({publicLanding:true,repository,modules,localProjects,execution,diagnostics,modelRelay,modelAdmin:auth=>auth.kind==='ui'&&auth.ownerId===rootAuth.ownerId&&auth.actorId===rootAuth.actorId,...publicAccessOptions(),...buildInformation(),publicDir:process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'?join(root,'public'):null});
 let stopping=false;
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{if(stopping)return;stopping=true;await app.close();repository.close();process.exit(0);});
 try{

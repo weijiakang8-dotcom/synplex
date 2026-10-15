@@ -10,4 +10,7 @@ node_modules
 **/*.log
 **/*.key
 **/*.pem
-vendor
+vendor/**/__pycache__
+vendor/**/.env*
+vendor/**/*.log
+vendor/**/*.sqlite*

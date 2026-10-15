@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import {launchTestBrowser,browserEvidenceDirectory} from '../testing/browser.mjs';
+
+const evidence=browserEvidenceDirectory('home','SYNPLEX_HOME_EVIDENCE_DIR');
+const dir=mkdtempSync(join(tmpdir(),'synplex-home-')),repository=new WorkspaceRepository({dataDir:dir});
+const app=createWorkspaceServer({repository,publicDir:resolve('public'),publicLanding:true}),url=await app.listen(),browser=await launchTestBrowser(),errors=[],external=[];
+try{
+ const page=await browser.newPage({viewport:{width:1280,height:900},reducedMotion:'reduce'});
+ page.on('pageerror',e=>errors.push(e.message));
+ await page.route('**/*',route=>{if(new URL(route.request().url()).origin===url)return route.continue();external.push(route.request().url());return route.abort();});
+ const response=await page.goto(url);assert.ok(response.headers()['content-security-policy'].includes("script-src 'self'"));
+ assert.equal(await page.locator('h1').textContent(),'把模糊问题变成有依据的结构化系统');
+ const preview=page.locator('.window img');await preview.evaluate(image=>image.decode());
+ assert.equal(await preview.getAttribute('src'),'/home/workspace-chat.png');
+ assert.deepEqual(await preview.evaluate(image=>[image.naturalWidth,image.naturalHeight]),[1280,900]);
+ const imageResponse=await page.request.get(url+'/home/workspace-chat.png');assert.equal(imageResponse.status(),200);assert.ok(imageResponse.headers()['content-type'].includes('image/png'));
+ assert.match(await page.locator('.window-caption').textContent(),/真实界面/);
+ await page.getByRole('button',{name:'连接我的 AI 工具'}).click();assert.equal(await page.locator('#tools').evaluate(e=>e.open),true);
+ assert.equal(await page.locator('#tools .download-link').count(),2);await page.getByRole('button',{name:'关闭',exact:true}).click();
+ assert.equal(await page.locator('#tools').evaluate(e=>e.open),false);
+ for(const path of ['/api/v1/ui_bootstrap','/api/v1/capabilities'])assert.equal((await page.request.get(url+path)).status(),403);
+ assert.equal((await page.request.post(url+'/internal/model/v1/chat/completions',{data:{}})).status(),403);
+ const still=await page.locator('#stars').evaluate(c=>c.toDataURL());await page.waitForTimeout(120);assert.equal(await page.locator('#stars').evaluate(c=>c.toDataURL()),still);
+ await page.emulateMedia({reducedMotion:'no-preference'});await page.waitForTimeout(120);const frame=await page.locator('#stars').evaluate(c=>c.toDataURL());await page.waitForTimeout(180);assert.notEqual(await page.locator('#stars').evaluate(c=>c.toDataURL()),frame);
+ await page.mouse.move(1000,180);await page.waitForTimeout(100);
+ await page.screenshot({path:join(evidence,'首页-桌面.png'),fullPage:true});
+ await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:join(evidence,'首页-手机.png'),fullPage:true});
+ await page.getByRole('link',{name:'进入我的工作台'}).click();assert.equal(new URL(page.url()).pathname,'/app');
+ const connection=page.locator('#connection-form');await connection.waitFor();
+ assert.equal(await connection.getAttribute('action'),'/api/v1/ui_pair');
+ assert.equal(await connection.locator('input[name=pair]').getAttribute('type'),'password');
+ assert.equal(await connection.getByRole('button',{name:'连接工作台',exact:true}).count(),1);
+ assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+ writeFileSync(join(evidence,'result.json'),JSON.stringify({modelCalls:0,checks:['accepted visual layout under strict same-origin CSP','reduced-motion canvas static; actual animated frames differ; desktop/mobile no overflow','extension dialog opens and closes; published file links present','workbench navigation opens actual connection screen','private APIs deny unauthenticated user','no external network requested'],proxyAuthenticationVerified:false},null,2),{mode:0o600,flag:'wx'});
+ console.log('首页及工作台真实导航通过，私人接口拒绝未连接访问，模型调用0；容器代理认证仍待验收。');
+}finally{await browser.close();await app.close();repository.close();rmSync(dir,{recursive:true,force:true});}

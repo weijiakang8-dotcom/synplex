@@ -30,5 +30,5 @@ export function followupInput(request,history,taskInputs){
  const options=request.executionOptions??previous.packet.executionOptions;if(options)input.executionOptions=options;
  const binding={rootRunId:root.run.id,parentRunId:previous.run.id,parentResultId:previous.result.id,question,
   preparationHash:followupRequest(request),historyHash:payloadHash(history.map(h=>({runId:h.run.id,resultId:h.result.id,resultHash:h.result.payloadHash,question:h.turn?.question??null})))};
- return {input,binding,taskInputs};
+ return {input,binding,taskInputs,chatReference:root.packet.chatReference??null};
 }

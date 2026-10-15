@@ -173,6 +173,9 @@ def load_config(directory: Path, backend: Path):
     from app.core.failure import RetryPolicy
     construct = model_gateway.get_chat_model
     def chat_model(model, **kwargs):
+        if data.get("model_mode") == "relay":
+            from model_relay import build_client
+            return build_client(data, model, **kwargs)
         if profile:
             from provider_chat import build_client
             return build_client(profile, model, **kwargs)
@@ -186,12 +189,12 @@ def load_config(directory: Path, backend: Path):
         return construct(runtime, **kwargs)
     model_gateway.get_chat_model = chat_model
     model_gateway.LLM_RETRY_POLICY = RetryPolicy(max_attempts=1)
-    if profile:
+    if profile or data.get("model_mode") == "relay":
         # A SQL non-null legacy column defaults to zero. It is not a verified
         # provider price and must not become a free model or an observed fee.
         rate = model_gateway.ModelGateway._rate_for_model
         async def known_rate(self, name, organization_id):
-            if name in profile.models:
+            if data.get("model_mode") == "relay" or name in profile.models:
                 return None
             return await rate(self, name, organization_id)
         model_gateway.ModelGateway._rate_for_model = known_rate

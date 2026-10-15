@@ -33,5 +33,14 @@ test('private single-use launcher opens an HttpOnly local session; Origin, scope
  assert.equal((await post('ui_history',input,'https://malicious.example')).status,403);
  assert.equal((await post('ui_history',{...input,scope:{...scope,versionId:null}})).status,403);
  assert.equal((await post('ui_history',{...input,actorId:'admin'})).status,403);
+ const other=createWorkspaceServer({repository}),otherUrl=await other.listen();t.after(()=>other.close());
+ const otherPairing=await other.createUiPairing(auth,scope);
+ const otherPair=await fetch(otherUrl+'/api/v1/ui_pair',{method:'POST',body:new URLSearchParams({pair:otherPairing.nonce}),redirect:'manual'});
+ const otherCookie=otherPair.headers.get('set-cookie').split(';')[0];assert.notEqual(otherCookie.split('=')[0],cookie.split('=')[0]);
+ const sharedCookies=cookie+'; '+otherCookie;
+ for(const endpoint of [url,otherUrl])assert.equal((await fetch(endpoint+'/api/v1/ui_bootstrap',{headers:{Cookie:sharedCookies}})).status,200);
+ assert.equal((await fetch(otherUrl+'/api/v1/ui_logout',{method:'POST',headers:{Cookie:sharedCookies}})).status,200);
+ assert.equal((await fetch(otherUrl+'/api/v1/ui_bootstrap',{headers:{Cookie:sharedCookies}})).status,403);
+ assert.equal((await fetch(url+'/api/v1/ui_bootstrap',{headers:{Cookie:sharedCookies}})).status,200,'logging out another local instance must not end this session');
  repository.revokeCredential(ui.id);assert.equal((await fetch(`${url}/api/v1/ui_bootstrap`,{headers:{Cookie:cookie}})).status,403);
 });

@@ -16,6 +16,7 @@ export function taskPreparationInput(data){
   mode:executor==='current_host'?'host_assist':executor==='synplex'?'platform_owned':'delegated',executor,
   selectedOccurrenceIds:data.getAll('occurrence'),maxInputTokens:Number(data.get('maxInputTokens'))};
  if(data.get('model'))input.executionOptions={model:String(data.get('model')),effort:String(data.get('effort'))};
+ if(data.get('conversationId'))input.conversationId=String(data.get('conversationId'));
  return input;
 }
 export function preparationNotice(storage,scope,esc){

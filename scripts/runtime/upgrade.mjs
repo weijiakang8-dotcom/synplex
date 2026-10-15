@@ -8,6 +8,8 @@ import {snapshotWorkspace,inspectDatabase,verifyWorkspaceSource,restoreWorkspace
 import {canonicalTarget} from './paths.mjs';
 import {payloadHash} from '../../packages/contracts/validate.mjs';
 import {assertDataFeatures} from './data-compatibility.mjs';
+import {verifyProductVersion} from './product-version-check.mjs';
+import {acquireWorkspaceLease} from './workspace-lease.mjs';
 
 const invalid=message=>{throw new Error(message);};
 const shellQuote=value=>"'"+value.replace(/'/g,"'\\''")+"'";
@@ -56,7 +58,7 @@ function checkIdentity(identity,dataDir){
  const data=inspectDatabase(join(dataDir,'workspace.sqlite'));
  if(data.versions.some(v=>!identity.schemaVersions.includes(v)))invalid('当前资料与这个版本不兼容，不能强行切换程序或倒退数据库。');
  assertDataFeatures(identity.path,join(dataDir,'workspace.sqlite'));
- if(existsSync(join(dataDir,'product-start.json'))&&!existsSync(join(identity.path,'scripts/runtime/open.mjs')))invalid('这份版本不能联合启动当前执行环境，未切换。请保留现有版本或先由维护人员核对启动方式。');
+ verifyProductVersion(identity.path,dataDir);
  return data;
 }
 function stateOf(root,{pending=false,verifyCurrent=true}={}){
@@ -81,17 +83,20 @@ export async function initializeInstallation(root,release,dataDir){
  // macOS may canonically be /private/var); containment uses the real directory.
  if(existsSync(root)||[release,canonicalData].some(p=>root===p||root.startsWith(p+sep)||p.startsWith(root+sep)))invalid('请选择资料和程序之外全新的安装管理文件夹。');
  const current=releaseIdentity(release);checkIdentity(current,dataDir);
+ const lease=acquireWorkspaceLease(dataDir);
+ try{
  mkdirSync(root,{recursive:true,mode:0o700});
  // An interrupted initial snapshot leaves no usable installation pointer.
- const backup=join(root,'initial-backup');const manifest=await snapshotWorkspace(dataDir,backup);
+ const backup=join(root,'initial-backup');const manifest=await snapshotWorkspace(dataDir,backup,{lease});
  const staged=restoreWorkspace(backup,join(root,'initial-probe'),{port:15997});probe(current,staged.dataDir,join(root,'initial-doctor.json'));
  if(payloadHash(inspectDatabase(join(staged.dataDir,'workspace.sqlite')))!==payloadHash(staged.data))invalid('启动检查改变了副本资料，未完成安装。');
- verifyWorkspaceSource(dataDir,manifest);
+ checkIdentity(current,dataDir);verifyWorkspaceSource(dataDir,manifest,{lease});
  const state={format:'synplex.workspace-installation/1',dataDir,current,previous:null,generation:1,createdAt:new Date().toISOString(),engineUpgradeIncluded:false};
  // Keep using the manager which actually performed these compatibility
  // checks. A rollback must not switch maintenance to unaware older code.
  writeLaunchers(root,fileURLToPath(import.meta.url));
  atomicJSON(join(root,'installation.json'),state);return state;
+ }finally{lease.close();}
 }
 
 async function switchVersion(root,target,{rollback=false,fault=()=>{}}={}){
@@ -100,15 +105,19 @@ async function switchVersion(root,target,{rollback=false,fault=()=>{}}={}){
  if(!next)invalid('没有可回退的上一版。');
  if(next.contentHash===state.current.contentHash)invalid('已经使用这份版本，不重复切换。');
  checkIdentity(next,state.dataDir);
+ const lease=acquireWorkspaceLease(state.dataDir);
+ try{return await switchLocked(root,state,next,{rollback,fault,lease});}finally{lease.close();}
+}
+async function switchLocked(root,state,next,{rollback,fault,lease}){
  const owner=takeLock(root,rollback?'rollback':'upgrade');
  const intentFile=join(root,'upgrade-intent.json'),id=randomUUID(),backup=join(root,'backup-'+id),history=join(root,'change-'+id+'.json');
  const before=state,after={...state,current:next,previous:state.current,generation:state.generation+1};
  let intent={id,kind:rollback?'rollback':'upgrade',before,after,backup,status:'preparing',createdAt:new Date().toISOString()};
  try{
-  atomicJSON(intentFile,intent);const manifest=await snapshotWorkspace(state.dataDir,backup);
+  atomicJSON(intentFile,intent);const manifest=await snapshotWorkspace(state.dataDir,backup,{lease});
   const staged=restoreWorkspace(backup,join(root,'probe-'+id),{port:15997});probe(next,staged.dataDir,join(root,'doctor-'+id+'.json'));
   if(payloadHash(inspectDatabase(join(staged.dataDir,'workspace.sqlite')))!==payloadHash(staged.data))invalid('启动检查改变了副本资料，未切换版本。');
-  checkIdentity(next,state.dataDir);verifyWorkspaceSource(state.dataDir,manifest);
+  checkIdentity(next,state.dataDir);verifyWorkspaceSource(state.dataDir,manifest,{lease});
   if(payloadHash(readPrivate(join(root,'installation.json')))!==payloadHash(before))invalid('安装记录已变化，未切换版本。');
   intent={...intent,status:'prepared',dataHash:manifest.data.contentHash};atomicJSON(intentFile,intent);fault('prepared');
   atomicJSON(join(root,'installation.json'),after);fault('switched');
@@ -128,6 +137,10 @@ export const rollbackInstallation=(root,options)=>switchVersion(root,null,{...op
 
 export function reconcileUpgrade(root){
  const loaded=stateOf(root,{pending:true,verifyCurrent:false});root=loaded.root;const file=join(root,'upgrade-intent.json');
+ const lease=acquireWorkspaceLease(loaded.state.dataDir);
+ try{return reconcileLocked(root,file);}finally{lease.close();}
+}
+function reconcileLocked(root,file){
  const guard=join(root,'.reconcile-lock');mkdirSync(guard,{mode:0o700});
  try{
  const owner=readPrivate(join(root,'.upgrade-lock','owner.json'));

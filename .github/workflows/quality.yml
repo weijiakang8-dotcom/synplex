@@ -31,11 +31,36 @@ jobs:
           SYNPLEX_TEST_BUNDLED_BROWSER: '1'
           PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
           SYNPLEX_QUESTION_EVIDENCE_DIR: .runtime/ci-material-question
+      - name: Chat, model settings, and conversation to execution
+        run: node --import ./scripts/testing/offline.mjs scripts/integration/chat-task-browser-check.mjs
+        env:
+          SYNPLEX_TEST_NO_MODELS: '1'
+          SYNPLEX_TEST_BUNDLED_BROWSER: '1'
+          PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
+          SYNPLEX_CHAT_EVIDENCE_DIR: .runtime/ci-chat-task
+      - name: Public homepage and protected workbench entry
+        run: node --import ./scripts/testing/offline.mjs scripts/integration/home-browser-check.mjs
+        env:
+          SYNPLEX_TEST_NO_MODELS: '1'
+          SYNPLEX_TEST_BUNDLED_BROWSER: '1'
+          PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
+          SYNPLEX_HOME_EVIDENCE_DIR: .runtime/ci-home
+      - name: Read-only note import and links
+        run: node --import ./scripts/testing/offline.mjs scripts/integration/obsidian-browser-check.mjs
+        env:
+          SYNPLEX_TEST_NO_MODELS: '1'
+          SYNPLEX_TEST_BUNDLED_BROWSER: '1'
+          PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
+          SYNPLEX_OBSIDIAN_EVIDENCE_DIR: .runtime/ci-obsidian
       - name: Keep deterministic browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: core-mobile-workflow
-          path: .runtime/ci-material-question
+          path: |
+            .runtime/ci-material-question
+            .runtime/ci-chat-task
+            .runtime/ci-home
+            .runtime/ci-obsidian
           if-no-files-found: ignore
           retention-days: 7

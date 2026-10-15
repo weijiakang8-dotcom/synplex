@@ -1,7 +1,7 @@
 import {existsSync,readFileSync,lstatSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {payloadHash} from '../../packages/contracts/validate.mjs';
+import {payloadHash} from '../../packages/contracts/hash.mjs';
 
 const records=Object.freeze({task_followup:'task-followup/1',task_result_selection:'task-result-selection/1',project_expression_version:'project-expression-version/1',project_expression_stop:'project-expression-version/1'});
 export function releaseFeatures(root){
@@ -30,7 +30,12 @@ export function requiredDataFeatures(database){
    try{lstatSync(join(dirname(database),name));features.push('idle-product-handoff/1');}
    catch(error){if(error.code!=='ENOENT')throw error;}
   }
+  if(db.prepare("SELECT 1 FROM records WHERE kind='context' AND json_type(body_json,'$.chatReference') IS NOT NULL LIMIT 1").get())features.push('chat-task-reference/1');
   if(db.prepare("SELECT 1 FROM records WHERE kind='execution_question' AND json_type(body_json,'$.prompt.approval') IS NOT NULL LIMIT 1").get())features.push('operation-approval/1');
+  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_connections'").get()&&db.prepare("SELECT 1 FROM model_connections WHERE EXISTS (SELECT 1 FROM json_each(config_json,'$.models') WHERE json_type(value,'$.pricing')='object') LIMIT 1").get())features.push('model-price-snapshots/1');
+  for(const [table,feature] of [['model_connections','model-connections/1'],['chat_conversations','chat-continuity/1'],['model_execution_grants','execution-model-connections/1']]){
+   if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)&&db.prepare('SELECT 1 FROM '+table+' LIMIT 1').get())features.push(feature);
+  }
   return [...new Set(features)].sort();
  }finally{db.close();}
 }

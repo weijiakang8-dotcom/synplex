@@ -29,3 +29,17 @@ jobs:
         run: docker build -f deploy/Dockerfile -t synplex:ci .
       - name: Protected container, pairing and exact original roundtrip
         run: bash scripts/integration/container-check.sh
+  full-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.11.1'
+      - name: Build independent execution image
+        run: docker build -f deploy/Dockerfile.full -t synplex-full:ci .
+      - name: Full stack, public landing and protected workspace
+        run: bash scripts/integration/container-check.sh
+        env:
+          SYNPLEX_CONTAINER_FULL: '1'

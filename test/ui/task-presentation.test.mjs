@@ -1,3 +1,7 @@
+import {connectionScreen,showStartupFailure} from '../../public/workspace-startup.js';
+import {bindModelUsageReview,executionModelUsage} from '../../public/model-usage.js';
+import {createChatTask} from '../../public/chat-task.js';
+import {bindModelSettings,modelSettingsButton} from '../../public/model-settings.js';
 import {taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice} from '../../public/task-preparation.js';
 import {traceError,supportMessage,runtimeStatusCard} from '../../public/runtime-status.js';
 import {createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS} from '../../public/workspace-pages.js';
@@ -18,16 +22,17 @@ import {claimVersionDialog,claimComparison,metadataHistory} from '../../public/v
 import {claimEditor,sourceEditor,categoryFilter,AUTHORING_REQUESTS,pendingAuthoring,authoringRecovery} from '../../public/authoring.js';
 import {captureResultForms,restoreResultForms} from '../../public/result-form-state.js';
 import {createFileActions} from '../../public/file-actions.js';
-import {followupForm,conversationCard,currentQuestion,originalGoal} from '../../public/task-conversation.js';
+import {taskChatReferenceField,chatReferenceCard,followupForm,conversationCard,currentQuestion,originalGoal} from '../../public/task-conversation.js';
 import {resultSelectionRecovery,bindResultSelection,selectedResultNeedsReview} from '../../public/result-selection.js';
 import {approvalDetails,questionAction,questionHelp,waitingLabel} from '../../public/operation-approval.js';
+import {obsidianImportButton} from '../../public/obsidian-import.js';
 
 // Render the real page template without requests, executors, or a browser session.
 function page(view, executions = [], fixture = {}) {
-  const app = { addEventListener() {}, innerHTML: '' };
+  const app = { addEventListener() {}, querySelector(){return null;}, innerHTML: '' };
   const node = { addEventListener() {}, setAttribute() {}, classList: { add() {}, remove() {} } };
   const sandbox = {
-    bindPageFinder,bindInputMethodGuard(){},createWorkspaceLayout(){return {capture(){},attach(){},clear(){}};},approvalDetails,questionAction,questionHelp,waitingLabel,
+    obsidianImportButton,bindObsidianImport(){},connectionScreen,showStartupFailure,bindModelUsageReview,executionModelUsage,taskChatReferenceField,chatReferenceCard,createChatTask,bindModelSettings,modelSettingsButton,bindPageFinder,bindInputMethodGuard(){},createWorkspaceLayout(){return {capture(){},attach(){},clear(){}};},approvalDetails,questionAction,questionHelp,waitingLabel,
     taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice,TASK_STATUS, taskTitle, activityText, executionActivity, systemText, readableText, errorText, backgroundNote, fileLabel, modelControls,usageCard,budgetCard,conflictCard,conflictTitle,readConflictChoice,uploadFormat,sourceExtension,documentExtension,planEditor,taskPlanCards,revisionForm,stepNote,followupForm,conversationCard,currentQuestion,originalGoal,
     traceError,supportMessage,runtimeStatusCard,createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS,createFileActions,observeActions(){},captureResultForms,restoreResultForms,claimEditor,sourceEditor,categoryFilter,AUTHORING_REQUESTS,pendingAuthoring,authoringRecovery,sourceBriefDialog,claimVersionDialog,claimComparison,metadataHistory,resultSelectionRecovery,bindResultSelection,selectedResultNeedsReview,
     document: { querySelector: s => s === '#app' ? app : node, createElement: () => node,
@@ -35,7 +40,7 @@ function page(view, executions = [], fixture = {}) {
     sessionStorage: { getItem: () => null },
     setInterval() {}, setTimeout() {}, clearTimeout() {},
     window: { addEventListener() {} },
-    console
+    fetch:async()=>({ok:false,status:403,json:async()=>({code:'scope_denied'}),headers:{get(){return null;}}}),console
   };
   const code = readFileSync(new URL('../../public/app.js', import.meta.url), 'utf8')
     .replace(/^import .*?;\n/gm, '').replace(/^start\(\);$/m, '');

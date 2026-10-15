@@ -10,6 +10,7 @@ const file=(bytes,name,extra={})=>({bytes,headers:{'Content-Type':'application/o
  'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(name)}`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...extra}});
 const read=(keys,handler,valid=i=>keys.every(k=>typeof i[k]==='string'),optional=[])=>({keys,handler,valid,optional});
 const routes={
+ ui_obsidian_notes:read([],({repository,auth,input:i})=>json(repository.obsidianNotes(auth,i.scope))),
  ui_expression_versions:read([],({repository,auth,input:i})=>json(repository.expressionVersions(auth,i.scope))),
  ui_expression_version:read(['versionId'],({repository,auth,input:i})=>json(repository.expressionVersion(auth,i.scope,i.versionId))),
  ui_result_versions:read(['resultId'],({repository,auth,input:i})=>json(repository.resultVersions(auth,i.scope,i.resultId))),

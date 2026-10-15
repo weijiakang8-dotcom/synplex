@@ -6,7 +6,7 @@ export const TEXT_VERSION = '1';
 // Reserved for future verified event imports; this stage does not import message events.
 export const EVENT_VERSION = 'synplex.events/1';
 export const CHUNK_UNITS = 8192;
-export const TEXT_SOURCES = Object.freeze(['user-text', 'user-markdown', 'weave-explicit-export', 'synplex-explicit-export', 'isolated-test']);
+export const TEXT_SOURCES = Object.freeze(['obsidian-markdown', 'user-text', 'user-markdown', 'weave-explicit-export', 'synplex-explicit-export', 'isolated-test']);
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 function width(bytes, i) {

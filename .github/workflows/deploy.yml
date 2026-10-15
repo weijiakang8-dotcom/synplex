@@ -34,7 +34,7 @@ jobs:
           if api('commits/main')['sha']!=sha: raise SystemExit('Deploy only the reviewed current main commit')
           checks=api('commits/'+sha+'/check-runs?per_page=100')['check_runs']; latest={}
           for check in sorted(checks,key=lambda x:x.get('started_at') or ''): latest[check['name']]=check.get('conclusion')
-          required=['check','linux-workspace','container']
+          required=['check','linux-workspace','container','full-container']
           failed={name:latest.get(name,'missing') for name in required if latest.get(name)!='success'}
           if failed: raise SystemExit('Required checks: '+str(failed))
           PYCODE

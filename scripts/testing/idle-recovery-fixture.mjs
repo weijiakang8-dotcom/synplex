@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
 import {payloadHash,sha256,PROTOCOL_VERSION} from '../../packages/contracts/validate.mjs';
 
-export function seedIdleRecoveryWorkspace(dataDir,engineRoot,bootstrap,taskId){
+export function seedIdleRecoveryWorkspace(dataDir,engineRoot,bootstrap,taskId,{relay=false}={}){
  const scope={projectId:'idle-recovery-fixture',versionId:null,branchId:null},repo=new WorkspaceRepository({dataDir});
  try{
   const caps=['read_memory','write_memory','review_memory','prepare_task','record_result','execute'];
@@ -15,9 +15,16 @@ export function seedIdleRecoveryWorkspace(dataDir,engineRoot,bootstrap,taskId){
   const uiTokenFile=join(dataDir,'ui-token'),agentTokenFile=join(dataDir,'agent-token');
   writeFileSync(uiTokenFile,ui.token,{mode:0o600});writeFileSync(agentTokenFile,agent.token,{mode:0o600});
   writeFileSync(join(dataDir,'connection.json'),JSON.stringify({endpoint:'http://127.0.0.1:5411',scope,uiTokenFile,agentTokenFile}),{flag:'wx',mode:0o600});
-  const config={endpoint:`http://127.0.0.1:${bootstrap.api_port}`,workflowId:bootstrap.workflow_id,tokenFile:join(engineRoot,'engine/access-token')};
+  const config={...(relay?{useModelConnections:true,requireWorkerReceipt:true}:{}),endpoint:`http://127.0.0.1:${bootstrap.api_port}`,workflowId:bootstrap.workflow_id,tokenFile:join(engineRoot,'engine/access-token')};
   writeFileSync(join(dataDir,'executors.json'),JSON.stringify({synplex:config}),{flag:'wx',mode:0o600});
-  const auth=repo.authenticate(ui.token),state=repo.state(auth,scope),goal='保留已完成的合成任务与成果';
+  const auth=repo.authenticate(ui.token);
+  if(relay){
+   repo.models(auth,scope).save({requestId:'relay-model-fixture',config:{name:'恢复样本连接',endpoint:'https://api.example.com/v1',protocol:'chat-completions',maxOutputTokens:256,models:[{id:'fixture-model',name:'恢复型号',pricing:{validFrom:'2026-01-01T00:00:00Z',validUntil:null,inputUsdPerMillion:1,cachedInputUsdPerMillion:0.1,outputUsdPerMillion:2,source:'fixture-price'},capabilities:{tools:true,stream:false,efforts:[],contextWindow:32000}}]},secret:'synthetic-private-restore-key'});
+   const chat=repo.chat(auth,scope),conversation=chat.create('restore-conversation');
+   const request=chat.reserve({id:randomUUID(),conversationId:conversation.id,requestId:'restore-turn',inputHash:payloadHash('fixture-only'),content:'保留聊天历史',selection:{},excludedClaimIds:[],background:null});
+   chat.update(request.value.id,{status:'completed',delta:'这是恢复夹具，不是真实模型回复。'});
+  }
+  const state=repo.state(auth,scope),goal='保留已完成的合成任务与成果';
   const input={protocolVersion:PROTOCOL_VERSION,scope,requestId:randomUUID(),expectedStateRevision:state.stateRevision,goal,constraints:['不调用模型'],acceptanceCriteria:['原任务和原文件保留'],mode:'platform_owned',executor:'synplex',selectedOccurrenceIds:[],maxInputTokens:2000};
   const packet={id:randomUUID(),protocolVersion:PROTOCOL_VERSION,scope,stateRevision:state.stateRevision,permissionRevision:state.permissionRevision,goal,constraints:input.constraints,acceptanceCriteria:input.acceptanceCriteria,facts:[],failures:[],lessons:[],candidates:[],conflicts:[],unknowns:[],evidence:[],selectedOccurrenceIds:[],coverage:'complete',budget:{maxInputTokens:2000,reservedTokens:100,estimatedTokens:300,estimatorVersion:'synthetic/1'},createdAt:new Date().toISOString()};
   packet.contentHash=payloadHash(packet);

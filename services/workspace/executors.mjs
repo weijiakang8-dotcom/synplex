@@ -1,3 +1,4 @@
+import {createModelConnectionExecutor} from '../../adapters/execution/model-connections.mjs';
 import {lstatSync,readFileSync,existsSync,realpathSync} from 'node:fs';
 import {resolve,join,sep,isAbsolute} from 'node:path';
 import {createCodexExecutor} from '../../adapters/execution/codex.mjs';
@@ -14,7 +15,7 @@ function readExecutorConfiguration(dataDir){
  const config=JSON.parse(readFileSync(file,'utf8'));if(!config||Array.isArray(config)||Object.keys(config).some(k=>!['codex','synplex'].includes(k)))throw new Error('Unsupported configured executor');
  return config;
 }
-export function loadExecutors(dataDir){
+export function loadExecutors(dataDir,{relay=null,relayEndpoint=null}={}){
  const config=readExecutorConfiguration(dataDir);if(!config)return {};
  const adapters={};
  if(config.codex){
@@ -22,9 +23,13 @@ export function loadExecutors(dataDir){
   if(!realpathSync(c.home).startsWith(realpathSync(dataDir)+sep))throw new Error('Executor home cannot escape through a parent symlink');
   adapters.codex=createCodexExecutor({...c,dataDir:join(dataDir,'executors','codex')});
  }
- if(config.synplex){
-  const c=config.synplex;if(Object.keys(c).some(k=>!['endpoint','tokenFile','workflowId','requireWorkerReceipt','model','provider','effort','allowedModels'].includes(k))||!['endpoint','tokenFile','workflowId'].every(k=>typeof c[k]==='string')||c.requireWorkerReceipt!==undefined&&typeof c.requireWorkerReceipt!=='boolean')throw new Error('AgentHub needs one configured authenticated workflow');
-  adapters.synplex=createAgentHubExecutor({...c,dataDir:join(dataDir,'executors','agenthub')});
- }
+ if(config.synplex)adapters.synplex=loadSynplex(config.synplex,dataDir,{relay,relayEndpoint});
  return adapters;
+}
+
+function loadSynplex(c,dataDir,{relay,relayEndpoint}){
+if(Object.keys(c).some(k=>!['endpoint','tokenFile','workflowId','requireWorkerReceipt','model','provider','effort','allowedModels','useModelConnections'].includes(k))||c.useModelConnections!==undefined&&typeof c.useModelConnections!=='boolean'||!['endpoint','tokenFile','workflowId'].every(k=>typeof c[k]==='string')||c.requireWorkerReceipt!==undefined&&typeof c.requireWorkerReceipt!=='boolean')throw new Error('AgentHub needs one configured authenticated workflow');
+  const {useModelConnections,...base}=c;
+  if(useModelConnections&&(!relay||!relayEndpoint))throw new Error('Private model relay is required for user model connections');
+  return useModelConnections?createModelConnectionExecutor({...base,relay,relayEndpoint,dataDir:join(dataDir,'executors','agenthub')}):createAgentHubExecutor({...base,dataDir:join(dataDir,'executors','agenthub')});
 }

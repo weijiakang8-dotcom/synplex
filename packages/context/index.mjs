@@ -1,3 +1,4 @@
+import {addRecordHistory} from './record-history.mjs';
 import { randomUUID } from 'node:crypto';
 import { PROTOCOL_VERSION, ProtocolError, validatePrepare, validateWire, payloadHash } from '../contracts/validate.mjs';
 import { occurrences, evidencePages, checkSnapshot, sameScope } from './repository-read.mjs';
@@ -13,6 +14,8 @@ export function estimatePacketTokens(packet) {
   const {contentHash,budget,...content}=packet;
   return Buffer.byteLength(JSON.stringify({...content,budget:{...budget,estimatedTokens:1000000}}),'utf8')+128;
 }
+
+function optionalInputs(options){return {...(options.taskInputs?.length?{taskInputs:options.taskInputs}:{}),...(options.chatReference?{chatReference:options.chatReference}:{})};}
 
 export async function prepareContext(repo,input,options) {
   validatePrepare(input);input=structuredClone(input);options=structuredClone(options);
@@ -36,7 +39,7 @@ export async function prepareContext(repo,input,options) {
     facts:[...state.facts.filter(relevant),...state.decisions],failures:[...state.failures],lessons:state.lessons.filter(relevant),
     candidates:[],conflicts:[...conflicts],unknowns:[],evidence:[],selectedOccurrenceIds:input.selectedOccurrenceIds,
     ...(input.executionOptions?{executionOptions:input.executionOptions}:{}),
-    ...(options.taskInputs?.length?{taskInputs:options.taskInputs}:{}),
+    ...optionalInputs(options),
     coverage:conflicts.length?'needs_input':'complete',budget:{maxInputTokens:input.maxInputTokens,reservedTokens:options.reservedTokens,
       estimatedTokens:0,estimatorVersion:options.estimatorVersion},createdAt:new Date().toISOString()};
   packet.evidence=unique([...packet.facts,...packet.failures,...packet.lessons].flatMap(c=>c.evidence));
@@ -83,6 +86,7 @@ export async function prepareContext(repo,input,options) {
       packet.evidence=unique([...packet.facts,...packet.failures,...packet.lessons,...packet.candidates].flatMap(c=>c.evidence).concat(historicalSpans));
     }
   }
+  if(options.includeRecordHistory!==false)await addRecordHistory(repo,packet,fits);
   packet.budget.estimatedTokens=estimatePacketTokens(packet);
   if(!fits())fail('budget_exceeded','必要背景和缺口说明超过预算。','缩小资料范围或增加背景预算，完整目标与验收仍保留。');
   checkSnapshot(await repo.getState(),state);

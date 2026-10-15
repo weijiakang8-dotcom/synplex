@@ -8,7 +8,12 @@ fi
 : "${SYNPLEX_PUBLIC_ORIGIN:?Set the exact external HTTPS origin}"
 mkdir -p /tmp/synplex-nginx
 nginx -t -c /app/deploy/nginx.conf
-node services/workspace/server.mjs &
+if [ "${SYNPLEX_FULL_ENGINE:-0}" = 1 ]; then
+  node deploy/prepare-full.mjs
+  node scripts/runtime/open.mjs --no-open &
+else
+  node services/workspace/server.mjs &
+fi
 app_pid=$!
 proxy_pid=''
 stop() {
@@ -22,7 +27,7 @@ trap stop TERM INT EXIT
 # Do not accept proxy traffic until the workspace really responds.
 node --input-type=module <<'READY'
 let ready=false;
-for(let i=0;i<100;i++){
+for(let i=0;i<600;i++){
  try{const r=await fetch('http://127.0.0.1:5200/health',{signal:AbortSignal.timeout(1000)});if(r.ok){ready=true;break;}}catch{}
  await new Promise(resolve=>setTimeout(resolve,100));
 }

@@ -61,7 +61,10 @@ def unused(root, lock=None):
     # Machine-readable descriptors distinguish our held startup lock from every
     # other open file. Do not exempt the whole calling process (it may own a log
     # or a writable source file too). lsof can return 1 while reporting matches.
-    check = subprocess.run(["/usr/sbin/lsof", "-Fpf", "+D", str(root)], capture_output=True, timeout=20)
+    lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else shutil.which("lsof")
+    if not lsof:
+        raise RuntimeError("未找到占用检查工具，未执行备份或恢复。")
+    check = subprocess.run([lsof, "-Fpf", "+D", str(root)], capture_output=True, timeout=20)
     if check.returncode not in {0, 1} or check.stderr.strip():
         raise RuntimeError("无法核对引擎是否仍在使用，未执行备份或恢复。")
     allowed = (str(os.getpid()), str(lock.fileno())) if lock else None
@@ -208,7 +211,7 @@ def restore(source, target, *, backend, pg_bin, valkey, api_port, redis_port, da
     data = read_private(target / "engine/bootstrap.json")
     # Business/graph identities stay exact; only this verified private cluster's
     # connection and root paths change. Model configuration remains disabled.
-    if data.get("runtime_format") != "synplex.engine-runtime/2" or data.get("model_mode") not in {"disabled", "configured"}:
+    if data.get("runtime_format") != "synplex.engine-runtime/2" or data.get("model_mode") not in {"disabled", "configured", "relay"}:
         raise RuntimeError("本恢复工具仅接收已独立隔离的引擎快照。")
     from engine_provider import load_provider
     load_provider(target / "engine", data)
@@ -226,7 +229,7 @@ def restore(source, target, *, backend, pg_bin, valkey, api_port, redis_port, da
             raise RuntimeError("恢复后的完整数据指纹不一致，执行器保持停用。")
     finally:
         owned.close()
-    saved.update(backend=str(backend.resolve()), valkey=str(valkey.resolve()), apiPort=api_port,
+    saved.update(backend=str(backend.resolve()), valkey=str(valkey.absolute()), apiPort=api_port,
                  redisPort=redis_port, databasePort=database_port, infrastructureId=infra["id"])
     verify_snapshot(source)
     verify_source(backend, saved)
@@ -255,7 +258,7 @@ def product_snapshot(workspace, engine, target, *, node):
         raise RuntimeError("工作台和引擎资料必须分别保存，不能互相嵌套。")
     settled(engine)
     saved, infra, data = configuration(engine)
-    if data.get("runtime_format") != "synplex.engine-runtime/2" or data.get("model_mode") not in {"disabled", "configured"}:
+    if data.get("runtime_format") != "synplex.engine-runtime/2" or data.get("model_mode") not in {"disabled", "configured", "relay"}:
         raise RuntimeError("联合备份目前只接收本产品已隔离的引擎。")
     target.mkdir(parents=True, mode=0o700)
     write_private(target / "product-incomplete.json", {"workspace": str(workspace), "engine": str(engine)})
@@ -306,6 +309,12 @@ def product_restore(source, target, *, node, workspace_port, **engine_options):
     write_private(target / "restore-incomplete.json", {"snapshot": str(source), "executorsEnabled": False})
     workspace_command(node, "restore", source / "workspace", target / "workspace", workspace_port)
     restore(source / "engine", target / "engine", **engine_options)
+    from relay_recovery import remap_restored_relay
+    bootstrap = target / "engine/engine/bootstrap.json"
+    current = read_private(bootstrap)
+    mapped = remap_restored_relay(source / "workspace", target / "workspace", current)
+    if mapped != current:
+        private_json(bootstrap, mapped)
     verify_product(source, node=node)
     from handoff_state import PROTOCOL
     from recovery_entry import write_recovery_entry

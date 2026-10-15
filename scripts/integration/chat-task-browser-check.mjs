@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
+import * as context from '../../packages/context/index.mjs';
+import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
+import {createWorkspaceServer} from '../../services/workspace/http.mjs';
+import {launchTestBrowser,browserEvidenceDirectory} from '../testing/browser.mjs';
+
+const output=browserEvidenceDirectory('chat-task','SYNPLEX_CHAT_EVIDENCE_DIR');
+const dir=mkdtempSync(join(tmpdir(),'synplex-chat-browser-')),repository=new WorkspaceRepository({dataDir:dir}),scope={projectId:'chat-ui',versionId:null,branchId:null};
+const cred=repository.createCredential({ownerId:'fixture',actorId:'human',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory','prepare_task','record_result']}),auth=repository.authenticate(cred.token);
+const config={name:'测试连接',endpoint:'https://api.example.com/v1',protocol:'chat-completions',maxOutputTokens:256,models:[{id:'fixture-model',name:'测试型号',capabilities:{tools:true,stream:true,efforts:['low','high'],contextWindow:32000}}]};
+repository.models(auth,scope).save({requestId:'model-fixture',config,secret:'synthetic-browser-chat-key'});const calls=[];
+const transport=async input=>{calls.push(input);for(const content of ['这是合成回复。','<img src="https://invalid.example/attack" onerror="alert(1)">']){input.onChunk(Buffer.from('data: '+JSON.stringify({id:'fixture',choices:[{delta:{content}}]})+'\n\n'));await delay(50);}input.onChunk(Buffer.from('data: '+JSON.stringify({choices:[{delta:{},finish_reason:'stop'}],usage:{prompt_tokens:50,completion_tokens:10}})+'\n\ndata: [DONE]\n\n'));};
+const app=createWorkspaceServer({repository,publicDir:resolve('public'),modules:{context},chatTransport:transport}),url=await app.listen(),browser=await launchTestBrowser(),errors=[],external=[];
+try{
+  const page=await browser.newPage({viewport:{width:390,height:844}});page.on('pageerror',e=>errors.push(e.message));
+  await page.route('**/*',route=>{if(new URL(route.request().url()).origin===url)return route.continue();external.push(route.request().url());return route.abort();});
+  let catalogQueries=0;await page.route(url+'/api/v1/ui_discover_models',async route=>{catalogQueries++;assert.equal(route.request().postDataJSON().endpoint,'https://api.example.com/v1');if(catalogQueries===1)return route.fulfill({status:503,json:{code:'capability_unavailable',message:'访问密钥无效或没有查询权限，请检查密钥及账号权限。'}});await route.fulfill({json:{models:['catalog-model-a','catalog-model-b'],capacities:{'catalog-model-b':64000},partial:false,notice:'已取得这个账号开放的型号。'}});});
+  const pair=await app.createUiPairing(auth,scope);await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0});await page.goto(url);
+  await page.locator('nav [data-nav=task]').click();await page.locator('#task-form [name=goal]').fill('执行任务草稿保留');await page.locator('[data-task-mode=chat]').click();
+  await page.locator('#chat-form [name=choice]').selectOption('0');await page.locator('#chat-form [name=effort]').selectOption('high');
+  const content=page.locator('#chat-content');await content.fill('中文输入法确认候选');
+  await content.evaluate(el=>el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:'中'})));await content.press('Enter');await delay(120);assert.equal(calls.length,0);
+  await content.evaluate(el=>el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'中'})));await delay(150);
+  await content.press('Enter');await page.locator('.chat-answer .tag').filter({hasText:'已完成'}).waitFor();assert.equal(calls.length,1);assert.equal(calls[0].body.reasoning_effort,'high');
+  await page.locator('#chat-content').fill('接着上一条说');await page.locator('#chat-form [type=submit]').click();await page.waitForFunction(()=>[...document.querySelectorAll('.chat-answer .tag')].filter(e=>e.textContent==='已完成').length===2);assert.equal(calls.length,2);
+  assert.ok(calls[1].body.messages.some(m=>m.role==='assistant'&&m.content.includes('合成回复')));assert.equal(await page.locator('.chat-answer img').count(),0);
+  await page.locator('#chat-content').fill('未发送的对话草稿');await page.locator('[data-task-mode=execute]').click();assert.equal(await page.locator('#task-form [name=goal]').inputValue(),'执行任务草稿保留');await page.locator('[data-task-mode=chat]').click();assert.equal(await page.locator('#chat-content').inputValue(),'未发送的对话草稿');
+  await page.reload();await page.locator('.chat-answer .tag').filter({hasText:'已完成'}).first().waitFor();assert.equal(await page.locator('#chat-content').inputValue(),'未发送的对话草稿');assert.equal(calls.length,2);assert.equal(await page.locator('#chat-form [name=choice]').inputValue(),'0');assert.equal(await page.locator('#chat-form [name=effort]').inputValue(),'high');
+  await page.locator('[data-chat-action=use]').click();
+  await page.locator('#task-form [name=conversationId]').waitFor({state:'attached'});
+  assert.equal(await page.locator('#task-form [name=goal]').inputValue(),'执行任务草稿保留');
+  await page.locator('#task-form [name=acceptance]').fill('包含之前问答的完整参考');
+  await page.locator('#task-form').getByRole('button',{name:'准备任务',exact:true}).click();
+  await page.locator('[data-ai-role=chat_reference]').waitFor();
+  await page.locator('[data-ai-role=chat_reference] summary').click();
+  assert.equal(await page.locator('[data-ai-role=chat_reference] article').count(),2);assert.equal(calls.length,2);
+  await page.locator('[data-action=remove-chat-reference]').click();assert.equal(await page.locator('#task-form [name=conversationId]').count(),0);
+  await page.locator('[data-task-mode=chat]').click();await page.locator('.chat-answer .tag').filter({hasText:'已完成'}).first().waitFor();
+  await page.locator('#chat-form [data-open-model-settings]').click();await page.locator('#new-model-connection').click();
+  const settings=page.locator('#model-settings-form');await settings.locator('[name=name]').fill('用户自带连接');await settings.locator('[name=endpoint]').fill('https://api.example.com/v1');await settings.locator('[name=secret]').fill('synthetic-catalog-browser-secret');
+  await settings.locator('[data-model-catalog]').click();await settings.locator('[data-model-catalog-status]').filter({hasText:'访问密钥无效或没有查询权限'}).waitFor();assert.equal(await settings.locator('[name=secret]').inputValue(),'synthetic-catalog-browser-secret');await settings.locator('[data-model-catalog]').click();await settings.locator('select[name=model]').waitFor();await settings.locator('select[name=model]').selectOption('catalog-model-b');assert.equal(await settings.locator('[name=modelName]').inputValue(),'catalog-model-b');assert.equal(await settings.locator('[name=context]').inputValue(),'64000');
+  await settings.locator('details').filter({hasText:'费用设置（选填）'}).locator('summary').click();await settings.locator('[name=priceEnabled]').check();
+  for(const [key,value] of [['inputUsdPerMillion','1'],['cachedInputUsdPerMillion','0.1'],['outputUsdPerMillion','2'],['source','服务商测试价表'],['validFrom','2026-01-01T00:00']])await settings.locator(`[name="price:${key}"]`).fill(value);
+  await settings.getByRole('button',{name:'保存连接',exact:true}).click();await page.locator('[data-model-id]').filter({hasText:'用户自带连接'}).waitFor();assert.equal(catalogQueries,2);assert.equal(calls.length,2);
+  const savedCard=page.locator('[data-model-id]').filter({hasText:'用户自带连接'});await savedCard.locator('[data-model-edit]').click();const edit=page.locator('#model-settings-form');assert.equal(await edit.locator('[name=secret]').getAttribute('required'),null);await edit.locator('details').filter({hasText:'更多设置'}).locator('summary').click();await edit.locator('[name=maxOutputTokens]').fill('512');await edit.getByRole('button',{name:'保存连接',exact:true}).click();await page.locator('[data-model-id]').filter({hasText:'用户自带连接'}).waitFor();await page.locator('#close-model-settings').click();await page.waitForFunction(()=>document.querySelector('#chat-form [name=choice]')?.options.length===3);
+  const saved=repository.models(auth,scope).list().find(c=>c.name==='用户自带连接');assert.equal(saved.maxOutputTokens,512);assert.equal(saved.models[0].capabilities.contextWindow,64000);assert.equal(saved.models[0].id,'catalog-model-b');assert.equal(saved.models[0].pricing.source,'服务商测试价表');
+  const ambiguous=await page.evaluate(async()=>{const {annotateActions}=await import('/semantic-actions.js');annotateActions();return [...document.querySelectorAll('[data-ai-state=ambiguous]')].map(e=>e.dataset.aiId);});assert.deepEqual(ambiguous,[]);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:join(output,'任务对话-手机.png'),fullPage:true});
+  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:join(output,'任务对话-桌面.png'),fullPage:true});assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+  writeFileSync(join(output,'result.json'),JSON.stringify({modelCalls:0,fixtureRequests:calls.length,realSystemImeVerified:false,checks:['existing task execution draft survives mode switch','composition protocol candidate confirmation never sends','one Enter produces one persisted request','two conversational turns carry prior answer','selected model and effort reach transport','malicious model HTML remains text without external requests','chat draft and history survive reload','explicit chat handoff freezes both turns without another model call; removable before preparation','catalog failure preserves the specific safe message and entered form; retry selects and saves exact model and sourced price without generation','mobile/desktop without overflow or ambiguous semantic IDs'],note:'Synthetic provider transport; not real model quality or native input method acceptance.'},null,2),{flag:'wx',mode:0o600});console.log('任务内连续对话真实页面回归通过，受控回复2次，付费请求0。');
+}catch(error){writeFileSync(join(output,'failure.json'),JSON.stringify({error:String(error),fixtureRequests:calls.length,modelCalls:0},null,2),{flag:'wx',mode:0o600});throw error;}
+finally{await browser.close();await app.close();repository.close();rmSync(dir,{recursive:true,force:true});}

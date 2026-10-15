@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { prepareContext } from '../../packages/context/index.mjs';
+import {chatBackground} from '../../services/workspace/chat-service.mjs';
 import { importSource } from '../../packages/ingestion/index.mjs';
 import { PROTOCOL_VERSION, payloadHash } from '../../packages/contracts/validate.mjs';
 import { setup, input, meta, scope, wrap, errorIs } from '../ingestion/helpers.mjs';
@@ -76,4 +77,22 @@ test('task relevance omits unrelated confirmed facts whole, keeps decisions and 
  const explicit=await prepareContext(h.repo,await request(h.repo,{goal:'编写Python',selectedOccurrenceIds:[selected],maxInputTokens:8000}),options);
  assert.ok(explicit.facts.some(c=>c.body.includes('禁止上传')));assert.equal(explicit.failures.length,1);assert.ok(explicit.facts.some(c=>c.type==='decision'));
  assert.deepEqual(await h.repo.getState(),before);
+});
+
+test('explicit turning-point reasons and old evidence enter the next task as history, never as current facts',async t=>{
+ const h=await setup(t),imported=await importSource(h.repo,input('决定：项目先使用全部记录作为背景。'),await meta(h.repo));
+ const first=(await h.repo.getState()).pending.find(c=>c.evidence[0].sourceId===imported.source.id);
+ const confirm=async claim=>{const review={protocolVersion:PROTOCOL_VERSION,scope,...await meta(h.repo),claimId:claim.id,reviewStatus:'confirmed'};const grant=h.repository.issueReviewAuthorization(h.auth,review);h.repository.review(h.auth,{...review,authorizationId:grant.authorizationId});};
+ await confirm(first);
+ const old=h.repository.claimDetail(h.auth,scope,first.id).claim;
+ const edited=h.repository.editClaim(h.auth,{protocolVersion:PROTOCOL_VERSION,scope,...await meta(h.repo),claimId:old.id,expectedClaimHash:payloadHash(old),draft:{title:'筛选相关背景',body:'决定：项目改为只带相关背景，原记录保留。',type:'decision',condition:'个人项目继续工作时'},note:'全量会话太长，关键决定被无关资料淹没。'}).value;
+ await confirm(edited);
+ const before=await h.repo.getState(),packet=await prepareContext(h.repo,await request(h.repo,{goal:'继续项目，说明为什么筛选背景'}),options);
+ assert.ok(packet.unknowns.some(x=>x.includes('全量会话太长，关键决定被无关资料淹没。')&&x.includes(old.id)&&x.includes(edited.id)));
+ assert.equal(packet.facts.some(c=>c.id===old.id),false);assert.ok(packet.facts.some(c=>c.id===edited.id));
+ assert.ok(packet.evidence.some(e=>e.sourceId===old.evidence[0].sourceId));assert.deepEqual(await h.repo.getState(),before);
+ const tight=await prepareContext(h.repo,await request(h.repo,{goal:'继续项目',maxInputTokens:8000}),options);assert.ok(tight.budget.estimatedTokens+tight.budget.reservedTokens<=8000);
+ const chatInput={scope,requestId:'history-chat',content:'继续项目，为什么筛选背景',excludedClaimIds:[]};
+ const chat=await chatBackground(h.repository,h.auth,chatInput,24000);assert.ok(chat.unknowns.some(x=>x.includes('全量会话太长，关键决定被无关资料淹没。')));assert.ok(chat.evidence.some(e=>e.sourceId===old.evidence[0].sourceId));
+ const excluded=await chatBackground(h.repository,h.auth,{...chatInput,excludedClaimIds:[edited.id]},24000);assert.equal(excluded.facts.some(c=>c.id===edited.id),false);assert.equal(excluded.unknowns.some(x=>x.includes('全量会话太长，关键决定被无关资料淹没。')),false);assert.deepEqual(await h.repo.getState(),before);
 });

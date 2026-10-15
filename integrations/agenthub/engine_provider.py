@@ -55,6 +55,12 @@ class Provider:
 
 
 def load_provider(directory, data):
+    if data.get("model_mode") == "relay":
+        from model_relay import enabled
+        enabled(data)
+        if (directory / "provider.json").exists():
+            raise RuntimeError("执行模型连接与旧设置冲突。")
+        return None
     file = directory / "provider.json"
     if data.get("model_mode") == "disabled":
         if file.exists():

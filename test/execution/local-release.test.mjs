@@ -18,7 +18,12 @@ test('发行清单保全锁依赖和文件身份，拒绝缺包/篡改/外部替
  const manifestPath=join(target,'release.json'),manifestBytes=readFileSync(manifestPath);writeFileSync(manifestPath,JSON.stringify({...manifest,workspaceFeatures:['task-followup/1']}));assert.throws(()=>verifyRelease(target),/能力声明/);writeFileSync(manifestPath,manifestBytes);verifyRelease(target);
  const file=join(target,'services/workspace/server.mjs'),original=readFileSync(file);writeFileSync(file,'modified');assert.throws(()=>verifyRelease(target),/被修改/);writeFileSync(file,original);verifyRelease(target);
  assert.throws(()=>buildRelease(join(source,'public','nested'),{sourceRoot:source}),/独立目录/);
- mkdirSync(join(source,'node_modules'));symlinkSync(join(source,'.env'),join(source,'node_modules','escape'));assert.throws(()=>buildRelease(join(dir,'bad-dependency'),{sourceRoot:source,includeDependencies:true}),/外部替身/);
+ mkdirSync(join(source,'node_modules'));const dependency=join(source,'node_modules','fixture.js');writeFileSync(dependency,'// locked runtime');
+ const bundled=join(dir,'bundled');buildRelease(bundled,{sourceRoot:source,includeDependencies:true});
+ const reused=join(dir,'reused');buildRelease(reused,{sourceRoot:source,includeDependencies:true,dependencyRelease:bundled});verifyRelease(reused);assert.equal(readFileSync(join(reused,'node_modules/fixture.js'),'utf8'),'// locked runtime');
+ writeFileSync(join(source,'package-lock.json'),'{"different":true}');assert.throws(()=>buildRelease(join(dir,'lock-mismatch'),{sourceRoot:source,includeDependencies:true,dependencyRelease:bundled}),/依赖锁/);writeFileSync(join(source,'package-lock.json'),'{}');
+ writeFileSync(join(bundled,'node_modules/fixture.js'),'// changed');assert.throws(()=>buildRelease(join(dir,'bundle-tampered'),{sourceRoot:source,includeDependencies:true,dependencyRelease:bundled}),/被修改/);
+ symlinkSync(join(source,'.env'),join(source,'node_modules','escape'));assert.throws(()=>buildRelease(join(dir,'bad-dependency'),{sourceRoot:source,includeDependencies:true}),/外部替身/);
  const backend=join(source,'vendor/backend');mkdirSync(backend,{recursive:true});const lock=join(backend,'requirements.lock');writeFileSync(lock,Array.from({length:20},(_,i)=>`fixture-${i}==1.0.0`).join('\n'));
  const occupied=join(dir,'existing-environment');mkdirSync(occupied);writeFileSync(join(occupied,'keep'),'original environment');
  assert.throws(()=>installEngineEnvironment({environment:occupied,backend,python:'/not-a-python',uv:'/not-an-installer',pgBin:'/not-a-database'}));assert.equal(readFileSync(join(occupied,'keep'),'utf8'),'original environment');

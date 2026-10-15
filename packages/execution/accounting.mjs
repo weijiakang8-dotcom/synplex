@@ -20,7 +20,7 @@ export function priceUsage(usage,prices,occurredAt){
   const p=matches[0],usd=((usage.inputTokens-usage.cachedInputTokens)*p.inputUsdPerMillion+usage.cachedInputTokens*p.cachedInputUsdPerMillion+usage.outputTokens*p.outputUsdPerMillion)/1e6;
   return {usd,pricingRevision:p.revision,reason:'priced_usage'};
 }
-export function usageLedger({attempts,results,reconciliations=[],prices=[]}){
+export function usageLedger({attempts,results,reconciliations=[],prices=[],modelCallCosts={}}){
   const byAttempt=new Map();
   for(const r of results){const list=byAttempt.get(r.attemptId)||[];list.push(r);byAttempt.set(r.attemptId,list);}
   const replaced=new Set(reconciliations.map(r=>r.supersedesId).filter(Boolean));
@@ -28,7 +28,7 @@ export function usageLedger({attempts,results,reconciliations=[],prices=[]}){
     const observations=byAttempt.get(a.id)||[],last=observations.at(-1);
     // One receipt per attempt; revision/cumulative snapshots are never summed as new calls.
     const usage=last?.usage??a.usage;
-    const priced=priceUsage(usage,prices,a.createdAt);
+    const priced=modelCallCosts[a.id]??priceUsage(usage,prices,a.createdAt);
     const invoices=reconciliations.filter(x=>x.attemptId===a.id&&!replaced.has(x.id));
     const invoice=invoices.length===1?invoices[0]:null;
     const reported=usage.provenance==='invoice'&&usage.observationScope==='attempt'?usage.costUsd:usage.provenance==='no_model_call'?0:null;

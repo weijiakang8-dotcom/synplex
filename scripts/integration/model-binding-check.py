@@ -261,6 +261,12 @@ async def main():
         artifacts.async_session_factory = sessions
         settings.ARTIFACT_ROOT = str(Path(directory) / 'artifacts')
         install_tools()
+        from app.engine.capabilities import CAPABILITIES
+        prior_document_tools = {tool.name for tool in CAPABILITIES['document'].tools}
+        assert 'read_task_file' in prior_document_tools
+        assert not prior_document_tools & {'check_task_code', 'test_task_python', 'summarize_table'}
+        install_tools()
+        assert [tool.name for tool in CAPABILITIES['document'].tools].count('read_task_file') == 1
         execution_id = selections[0][0]
         key = inventory([original])[0]['file_key']
         async def invoke(name, params, eid=execution_id, user_id=uid):

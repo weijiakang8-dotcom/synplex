@@ -1,3 +1,4 @@
+import {safeModelConnectionError} from './model-error.mjs';
 import { ProtocolError, PROTOCOL_VERSION, schema, validateWire, validatePrepare } from '../../packages/contracts/validate.mjs';
 
 const requests = { get_project_state: 'GetStateRequest', find_evidence: 'FindEvidenceRequest', prepare_task: 'PrepareTaskRequest',
@@ -64,7 +65,8 @@ export class WorkspaceService {
       if (previous) response = previous.value;
       else {
         if (typeof this.modules.context?.prepareContext !== 'function') unavailable('项目背景整理');
-        const packet = await this.modules.context.prepareContext(repo, input, { reservedTokens: 512, estimatorVersion: 'utf8-bytes-conservative/1' });
+        const chatReference=input.conversationId?this.repository.chat(auth,input.scope).snapshot(input.conversationId):null;
+        const packet = await this.modules.context.prepareContext(repo, input, { reservedTokens: 512, estimatorVersion: 'utf8-bytes-conservative/1',chatReference });
         response = this.repository.registerPrepared(auth, input, packet).value;
       }
     }
@@ -79,17 +81,17 @@ export class WorkspaceService {
   }
   async prepareStep(auth,request){
     const prior=this.repository.priorStepPreparation(auth,request);if(prior)return prior;
-    const {input,binding,taskInputs}=this.repository.stepPreparation(auth,request);
+    const {input,binding,taskInputs,chatReference}=this.repository.stepPreparation(auth,request);
     if(typeof this.modules.context?.prepareContext!=='function')unavailable('项目背景整理');
     const repo=await this.repository.forScope(auth,input.scope);
-    const packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs});
+    const packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs,chatReference});
     return this.repository.registerPrepared(auth,input,packet,binding).value;
   }
   async prepareFollowup(auth,request){
     const prior=this.repository.priorFollowupPreparation(auth,request);if(prior)return {...prior,conversation:this.repository.taskConversation(auth,request.scope,prior.run.id)};
-    const {input,binding,taskInputs}=this.repository.followupPreparation(auth,request);
+    const {input,binding,taskInputs,chatReference}=this.repository.followupPreparation(auth,request);
     if(typeof this.modules.context?.prepareContext!=='function')unavailable('项目背景整理');
-    const repo=await this.repository.forScope(auth,input.scope),packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs});
+    const repo=await this.repository.forScope(auth,input.scope),packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs,chatReference});
     const result=this.repository.registerPrepared(auth,input,packet,null,{request,binding}).value;
     return {...result,conversation:this.repository.taskConversation(auth,request.scope,result.run.id)};
   }
@@ -121,7 +123,7 @@ export class WorkspaceService {
       const { bytes, blob } = await repo.getBlob(job.sourceId);
       this.repository.importProgress(auth, scope, operationId, 'running');
       if (typeof this.modules.ingestion?.importSource !== 'function') unavailable('资料解析');
-      const guarded = Object.freeze(Object.fromEntries(['getState','saveBlob','getBlob','appendParsedRevisions','appendOccurrences','appendCandidates','queryEvidence','listOccurrences','getChunkCheckpoint','saveChunkCheckpoint','getOperation','getImportResult'].map(name => [name, async (...args) => {
+      const guarded = Object.freeze(Object.fromEntries(['getState','saveBlob','getBlob','getSourceMetadata','appendParsedRevisions','appendOccurrences','appendCandidates','queryEvidence','listOccurrences','getChunkCheckpoint','saveChunkCheckpoint','getOperation','getImportResult'].map(name => [name, async (...args) => {
         if (['saveBlob','appendParsedRevisions','appendOccurrences','appendCandidates','saveChunkCheckpoint'].includes(name) &&
             this.repository.operation(auth,scope,operationId).status !== 'running') throw new ProtocolError('conflict','导入已中断，不能继续应用结果。','核对原回执。','lookup_operation');
         return repo[name](...args);
@@ -163,6 +165,8 @@ export class WorkspaceService {
 
 // Never send raw exception messages, source text, connection secrets or provider payloads to clients.
 export function safeError(error, operationId = null) {
+  const modelError=safeModelConnectionError(error,operationId);
+  if(modelError)return validateWire('Error',modelError);
   const table = {
     validation_failed: ['填写内容不完整、格式不正确或太长。','请检查填写内容；原文没有被截短。','after_input'],
     scope_denied: ['没有访问权限，或内容不属于当前项目。','请检查账号和所选项目。','never'],

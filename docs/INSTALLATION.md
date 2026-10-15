@@ -5,7 +5,7 @@
 - Node.js **26.x**（本版本主要核验 26.11.0）、npm、Git。
 - macOS 内置 `lsof`；Linux 需安装 `lsof`。Node 22.16 是部分基础 API 的最低版本，完整资料解析请使用 Node 26。
 - 普通资料整理不需要 Python、模型账号或外部数据库。
-- 使用自有执行引擎时，另需 Python 3.11、uv、PostgreSQL 16 工具和 Valkey。相关环境独立创建，不修改其他工具的环境。
+- 使用自有执行引擎时，另需 Python 3.11、uv、PostgreSQL 16 工具、匹配该数据库版本的 pgvector 扩展和 Valkey。Python 的 pgvector 包不能代替数据库扩展；完整容器已包含两者。相关环境独立创建，不修改其他工具的环境。
 
 ```sh
 git clone https://github.com/weijiakang8-dotcom/synplex.git
@@ -57,3 +57,32 @@ node scripts/runtime/engine-environment.mjs install /absolute/path/to/new-python
 ## 5. 更新
 
 更新前正常关闭自己的工作台，保存数据库、原文件和配置的联合备份，再切换程序版本。不要用 `git clean`、覆盖数据库或强制重置任务来处理启动失败。具体恢复与回退步骤见[部署指南](DEPLOYMENT.md)。
+
+## 完整聊天与执行安装
+
+完成上述独立 Python 锁环境准备后，可用 `scripts/runtime/install-instance.mjs` 一次建立新的私有工作台、执行数据库、队列及联合启动配置。给安装器传入一个权限600的 JSON 设置文件：
+
+```json
+{
+  "directory": "/absolute/path/to/new-private-instance",
+  "environment": "/absolute/path/to/new-python-env",
+  "pgBin": "/absolute/path/to/postgresql/bin",
+  "valkey": "/absolute/path/to/valkey-server",
+  "ports": [5200, 5214, 5216, 5218]
+}
+```
+
+```sh
+node scripts/runtime/install-instance.mjs /absolute/path/to/private-install-settings.json
+```
+
+目录必须为空。失败会保留未完成记录，不能通过删除记录直接覆盖安装。完整安装成功后，打开资料目录中 `workspace/打开Synplex.command`，服务统一正常启动／退出。不会读取其他工具的模型密钥；进入“任务 → 模型设置”自行添加连接，见[模型连接](MODELS.md)。已有资料须走联合备份／恢复，不能把新安装当作迁移。
+## 已安装实例的旧稿读取修复
+
+文档执行步骤与写作步骤共用按任务授权、核对指纹的旧稿读取工具；不会因此获得代码运行或任意路径访问权限。
+
+维护工具 `scripts/runtime/patch-document-reader.py` 仅适用于这组已评估的适配程序修复：`task_tools.py` 的只读工具转换，以及 `engine_runtime.py` 按精确源码指纹核对的停用评估识别。它要求原包和新包通过完整文件核对；其他源码、依赖或数据库结构变化全部拒绝。不能拿它给其他版本补造兼容指纹。
+
+先正常关闭本实例、保存工作台与引擎的联合备份，再提供 `--previous`、`--candidate`、`--engine`、`--snapshot`（联合备份内的 engine 目录）及 `--node` 的明确位置。工具取得引擎独占锁，核对原启动配置、文件、数据库快照和空队列；只原子更新启动配置并保存私人迁移回执，不启动 API、工作进程或模型任务。切换前应核对工作台指纹未变。
+
+回退时先以新包停机备份当前数据，同样提供两发行包和这次引擎备份，并加 `--rollback`。仅在当前配置与原迁移回执完全相符、数据库及队列闲置、旧版重启检查也通过时恢复原适配程序身份，历史数据不回退。旧版无法识别保留的停用评估消息时会拒绝回退，不删除消息来迎合旧检查；此类实例的可运行旧版回退仍需兼容补丁验证。准备中或失败的回执必须先核对实际配置与备份，不能直接重复执行。此专用路径不代表通用跨版本引擎升级已验收。

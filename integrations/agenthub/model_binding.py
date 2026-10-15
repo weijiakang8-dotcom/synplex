@@ -61,11 +61,14 @@ def install_api(app, data):
         packet_hash: str = Field(pattern="^[a-f0-9]{64}$")
         payload_hash: str = Field(pattern="^[a-f0-9]{64}$")
 
+    from model_relay_contract import RelayBinding
+
     class Start(BaseModel):
         model_config = ConfigDict(extra="forbid")
         workflow_id: uuid.UUID
         user_input: str = Field(min_length=1, max_length=500_000)
         model_selection: Selection
+        model_binding: RelayBinding | None = None
         input_files: list[InputFile | SourceInputFile] = Field(default_factory=list, max_length=MAX_FILES)
         submission: Submission | None = None
 
@@ -84,6 +87,14 @@ def install_api(app, data):
         return {"protocol": "synplex.engine-selection/1", "choices": choices,
                 "submissionLookup": "synplex.execution-submission/1"}
 
+    @router.get("/api/synplex/relay-capabilities")
+    async def relay_capabilities(user: CurrentUserDep):
+        owns(user)
+        from model_relay import enabled
+        if not enabled(data):
+            raise HTTPException(404, "Private model relay is not configured")
+        return {"protocol": "synplex.execution-model/1", "submissionLookup": "synplex.execution-submission/1"}
+
     @router.get("/api/synplex/input-capabilities")
     async def input_capabilities(user: CurrentUserDep):
         owns(user)
@@ -101,16 +112,21 @@ def install_api(app, data):
         workflow = await session.get(Workflow, payload.workflow_id, options=[noload('*')])
         if not workflow or workflow.organization_id != user.organization_id:
             raise HTTPException(404, "Workflow not found")
-        models, choices = await available(session, data)
         selection = payload.model_selection.model_dump()
-        if not any(option["id"] == selection["model"]
-                   and option["provider"] == selection["provider"]
-                   and selection["reasoning_effort"] in option["efforts"] for option in choices):
-            raise HTTPException(422, "Selected model or effort is not enabled")
-        try:
-            chosen, effort = await resolve_selection(user.organization_id, selection, active_models=models)
-        except ModelSelectionError as error:
-            raise HTTPException(422, error.message) from error
+        if payload.model_binding is not None:
+            from model_relay import prepare_model
+            chosen, effort = await prepare_model(session, data, payload, user)
+        else:
+            models, choices = await available(session, data)
+            selection = payload.model_selection.model_dump()
+            if not any(option["id"] == selection["model"]
+                       and option["provider"] == selection["provider"]
+                       and selection["reasoning_effort"] in option["efforts"] for option in choices):
+                raise HTTPException(422, "Selected model or effort is not enabled")
+            try:
+                chosen, effort = await resolve_selection(user.organization_id, selection, active_models=models)
+            except ModelSelectionError as error:
+                raise HTTPException(422, error.message) from error
         try:
             files = inventory(payload.input_files)
         except (ValueError, TypeError) as error:

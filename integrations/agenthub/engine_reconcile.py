@@ -39,6 +39,9 @@ def restored_identity(source, target, *, node, handoff=None):
     original = read_private(source / "engine/engine/bootstrap.json")
     changed = {"backend", "api_port", "redis_port", "database_port", "database_user",
                "database_password", "infrastructure_id", "database_root"}
+    from relay_recovery import verify_restored_relay
+    if verify_restored_relay(source / "workspace", target / "workspace", original, data):
+        changed.add("model_relay_endpoint")
     strip = lambda d: {k: v for k, v in d.items() if k not in changed}
     old_start = read_private(source / "engine/original-startup.json")
     if (strip(data) != strip(original) or saved["sourceIdentity"] != old_start["sourceIdentity"]

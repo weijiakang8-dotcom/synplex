@@ -1,0 +1,44 @@
+FROM node:26.11.1-bookworm-slim@sha256:86f07bc9c5dce4578cf37e5a418b7bfc7f817cda25cde66e2b66e95ed86c4567 AS runtime-base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx lsof ca-certificates python3 python3-venv python3-dev gcc libpq-dev postgresql-15 redis-server \
+    && rm -rf /var/lib/apt/lists/*
+FROM runtime-base AS vector-builder
+# The original execution schema requires the PostgreSQL extension as well as
+# its Python client. Pin the official source and verify bytes before compiling.
+RUN apt-get update && apt-get install -y --no-install-recommends curl make postgresql-server-dev-15 \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --fail --location --retry 2 https://codeload.github.com/pgvector/pgvector/tar.gz/cab9da72c04353f143bb06b42ab70a403daac64a -o /tmp/pgvector.tar.gz \
+    && echo '0af705b6c9b2a3a1fd1f6fd991425c125387d3c8edc68b75ef027d2e0a05e57a  /tmp/pgvector.tar.gz' | sha256sum --check \
+    && mkdir /tmp/pgvector && tar -xzf /tmp/pgvector.tar.gz -C /tmp/pgvector --strip-components=1 \
+    && cd /tmp/pgvector && make -j2 OPTFLAGS="" PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config \
+    && make install DESTDIR=/vector-install PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config \
+    && mkdir -p /vector-install/usr/share/doc/synplex-pgvector \
+    && cp LICENSE /vector-install/usr/share/doc/synplex-pgvector/LICENSE
+FROM runtime-base
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY vendor/agenthub/backend/requirements.lock /app/vendor/agenthub/backend/requirements.lock
+RUN python3 -m venv /opt/synplex-python \
+    && /opt/synplex-python/bin/pip install --no-cache-dir --no-deps -r /app/vendor/agenthub/backend/requirements.lock \
+    && /opt/synplex-python/bin/pip check
+COPY --chown=node:node vendor/agenthub /app/vendor/agenthub
+COPY --chown=node:node public public
+COPY --chown=node:node services services
+COPY --chown=node:node packages packages
+COPY --chown=node:node adapters adapters
+COPY --chown=node:node plugins plugins
+COPY --chown=node:node integrations integrations
+COPY --chown=node:node scripts scripts
+COPY --chown=node:node migrations migrations
+COPY --chown=node:node deploy deploy
+RUN /opt/synplex-python/bin/python /app/deploy/record-python-environment.py \
+    && mkdir -p /var/lib/synplex /tmp/synplex-nginx \
+    && chown -R node:node /opt/synplex-python /var/lib/synplex /tmp/synplex-nginx \
+    && chmod 700 /var/lib/synplex && chmod 755 /app/deploy/container-entrypoint.sh
+COPY --from=vector-builder /vector-install/ /
+USER node
+ENV SYNPLEX_WORKSPACE_DATA_DIR=/var/lib/synplex/workspace SYNPLEX_WORKSPACE_SERVE_UI=1 SYNPLEX_WORKSPACE_PORT=5200 SYNPLEX_FULL_ENGINE=1 PYTHONDONTWRITEBYTECODE=1
+EXPOSE 8080
+HEALTHCHECK --interval=20s --timeout=5s --start-period=120s CMD node -e "fetch('http://127.0.0.1:5200/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+ENTRYPOINT ["/app/deploy/container-entrypoint.sh"]

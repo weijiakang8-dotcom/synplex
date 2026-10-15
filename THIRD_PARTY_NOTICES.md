@@ -8,6 +8,9 @@
 | mammoth | Word 文档正文 | BSD-2-Clause；版本见 package-lock.json |
 | pdf-parse | PDF 正文 | Apache-2.0；版本见 package-lock.json |
 | SheetJS CE | 表格读取 | Apache-2.0；锁定官方发行包 URL 与完整性 |
+| Redis 7.0 (Debian package) | Linux 完整部署的独立任务队列；仅内网使用 | BSD-3-Clause，https://github.com/redis/redis/blob/7.0/COPYING ；不使用 Redis 7.4 后的新许可版本 |
+| pgvector 0.8.2 | 完整 Linux 执行后台已有向量字段的数据库扩展 | PostgreSQL License；https://github.com/pgvector/pgvector/tree/cab9da72c04353f143bb06b42ab70a403daac64a ，镜像内保留 LICENSE，官方源码包固定 SHA256 |
+| PostgreSQL | 独立执行数据库 | PostgreSQL License，https://www.postgresql.org/about/licence/ |
 | Acorn | 静态代码分析 | MIT；开发依赖 |
 | Playwright Core | 浏览器回归 | Apache-2.0；开发依赖 |
 

@@ -2,7 +2,7 @@ import {existsSync,lstatSync,readdirSync,readFileSync,writeFileSync,mkdirSync,co
 import {resolve,join,relative,dirname,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {sha256,payloadHash} from '../../packages/contracts/validate.mjs';
+import {sha256,payloadHash} from '../../packages/contracts/hash.mjs';
 import {canonicalTarget} from './paths.mjs';
 import {releaseFeatures,verifyFeatureDeclaration} from './data-compatibility.mjs';
 
@@ -15,22 +15,29 @@ function inventory(dir){
 function copyTree(from,to,{dependency=false,engine=false}={}){
  const walk=(a,b)=>{const s=lstatSync(a);if(s.isSymbolicLink()){if(!dependency||!realpathSync(a).startsWith(realpathSync(from)+sep))throw new Error('源码或依赖包含外部替身，不能打包。');mkdirSync(dirname(b),{recursive:true});symlinkSync(readlinkSync(a),b);}else if(s.isDirectory()){mkdirSync(b,{recursive:true});for(const n of readdirSync(a).sort()){if(['.git','__pycache__','.runtime','.env','.DS_Store'].includes(n))continue;if(engine&&!lstatSync(join(a,n)).isDirectory()&&!n.endsWith('.py'))continue;walk(join(a,n),join(b,n));}}else if(s.isFile()){mkdirSync(dirname(b),{recursive:true});copyFileSync(a,b);chmodSync(b,s.mode&0o111?0o755:0o644);}else throw new Error('不能打包特殊文件。');};walk(from,to);
 }
-export function buildRelease(target,{sourceRoot=root,includeDependencies=false,engineSource=null}={}){
+function dependencyDirectory(sourceRoot,release){
+ if(!release)return join(sourceRoot,'node_modules');
+ const manifest=verifyRelease(release);
+ if(!manifest.dependenciesBundled)throw Error('复用依赖需要已经核对的同平台完整发行包。');
+ for(const name of ['package.json','package-lock.json'])if(sha256(readFileSync(join(sourceRoot,name)))!==sha256(readFileSync(join(release,name))))throw Error('依赖锁或项目声明不同，不能复用旧发行依赖。');
+ return join(release,'node_modules');
+}
+export function buildRelease(target,{sourceRoot=root,includeDependencies=false,engineSource=null,dependencyRelease}={}){
  sourceRoot=realpathSync(resolve(sourceRoot));target=canonicalTarget(target);if(existsSync(target)||target===sourceRoot||sourceRoot.startsWith(target+sep)||target.startsWith(sourceRoot+sep)&&!target.startsWith(join(sourceRoot,'.runtime')+sep))throw new Error('发行包必须使用新的独立目录。');
  for(const path of ['package.json','package-lock.json','services/workspace/server.mjs','scripts/runtime/workspace.mjs','scripts/runtime/release.mjs','public/index.html'])if(!existsSync(join(sourceRoot,path)))throw new Error('发行源码不完整，请保留当前版本并核对缺少的文件。');
  mkdirSync(target,{recursive:true,mode:0o700});writeFileSync(join(target,'release-incomplete.json'),'{}',{flag:'wx',mode:0o600});
  for(const name of [...roots,...files])if(existsSync(join(sourceRoot,name)))copyTree(join(sourceRoot,name),join(target,name));
- if(includeDependencies)copyTree(join(sourceRoot,'node_modules'),join(target,'node_modules'),{dependency:true});
+ if(includeDependencies)copyTree(dependencyDirectory(sourceRoot,dependencyRelease),join(target,'node_modules'),{dependency:true});
  if(engineSource){
   engineSource=realpathSync(resolve(engineSource));const to=join(target,'vendor/agenthub/backend');
   for(const name of ['app','alembic'])if(existsSync(join(engineSource,name)))copyTree(join(engineSource,name),join(to,name),{engine:true});
   for(const name of ['requirements.txt','requirements.lock','alembic.ini']){copyTree(join(engineSource,name),join(to,name));}
   copyTree(join(engineSource,'../LICENSE'),join(target,'vendor/agenthub/LICENSE'));
  }
- const top=spawnSync('git',['rev-parse','--show-toplevel'],{cwd:sourceRoot,encoding:'utf8'});
+ const top=spawnSync('git',['rev-parse','--show-toplevel'],{cwd:sourceRoot,encoding:'utf8',timeout:10000});
  const ownRepository=top.status===0&&realpathSync(top.stdout.trim())===sourceRoot;
- const git=ownRepository?spawnSync('git',['rev-parse','HEAD'],{cwd:sourceRoot,encoding:'utf8'}):null;
- const status=ownRepository?spawnSync('git',['status','--porcelain'],{cwd:sourceRoot,encoding:'utf8'}):null;
+ const git=ownRepository?spawnSync('git',['rev-parse','HEAD'],{cwd:sourceRoot,encoding:'utf8',timeout:10000}):null;
+ const status=ownRepository?spawnSync('git',['status','--porcelain'],{cwd:sourceRoot,encoding:'utf8',timeout:10000}):null;
  const sourceCommit=git?.status===0?git.stdout.trim():null,sourceDirty=status?.status===0?!!status.stdout.trim():null;
  const commit=sourceDirty===false?sourceCommit:null;
  const contents=inventory(target).filter(f=>f.path!=='release-incomplete.json');

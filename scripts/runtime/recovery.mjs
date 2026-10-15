@@ -1,3 +1,7 @@
+import {RELAY_TABLES} from '../../services/workspace/model-relay-store.mjs';
+import {CHAT_TABLES} from '../../services/workspace/chat-store.mjs';
+import {MODEL_TABLES,verifyModelData} from '../../services/workspace/model-vault.mjs';
+import {MODEL_SERVICE_TABLES} from '../../services/workspace/model-service.mjs';
 import {existsSync,lstatSync,readdirSync,readFileSync,writeFileSync,mkdirSync,chmodSync,copyFileSync,renameSync,realpathSync,unlinkSync} from 'node:fs';
 import {resolve,join,dirname,relative,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -36,7 +40,7 @@ function unused(root,lease){
  for(;;){
   // Compare actual device/inode identities. Under LC_ALL=C lsof escapes Chinese
   // names; textual path matching would mistake our own lock for a foreign file.
-  const r=spawnSync('/usr/sbin/lsof',['-FpfiD','+D',root],{encoding:'utf8',timeout:20000,maxBuffer:1024*1024});
+  const r=spawnSync(process.platform==='darwin'?'/usr/sbin/lsof':'lsof',['-FpfiD','+D',root],{encoding:'utf8',timeout:20000,maxBuffer:1024*1024});
   if(r.error||![0,1].includes(r.status)||r.stderr.trim())throw new Error('无法核对资料是否仍在使用，未执行备份或恢复。');
   if(!foreignHolders(r.stdout,root,lease))return;
   if(Date.now()>=deadline)throw new Error('资料仍在使用，请先正常关闭这份工作台；不会停止其他程序。');
@@ -48,15 +52,18 @@ function unused(root,lease){
 export function inspectDatabase(file){
  const db=new DatabaseSync(file,{readOnly:true});try{
   if(Object.values(db.prepare('PRAGMA integrity_check').get())[0]!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length)throw new Error('数据库校验失败。');
+  verifyModelData(db,dirname(file));
   const versions=db.prepare('SELECT version FROM schema_versions ORDER BY version').all().map(r=>r.version);if(versions.some(v=>v!==1)||!versions.length)throw new Error('资料版本与当前程序不兼容，不能强行恢复。');
   for(const r of db.prepare('SELECT payload_hash,body_json FROM records').iterate())if(payloadHash(JSON.parse(r.body_json))!==r.payload_hash)throw new Error('记录内容与指纹不符，不能当作有效备份。');
   for(const r of db.prepare('SELECT sha256,bytes FROM raw_blobs').iterate())if(sha256(r.bytes)!==r.sha256)throw new Error('原件或成果的指纹不符，不能当作有效备份。');
   const missing=db.prepare(`SELECT 1 FROM records r JOIN scopes s ON s.partition=r.partition LEFT JOIN raw_blobs b ON b.owner_id=s.owner_id AND b.sha256=json_extract(r.body_json,'$.sha256')
     WHERE r.kind IN ('source','artifact_file') AND (b.sha256 IS NULL OR length(b.bytes)!=json_extract(r.body_json,'$.byteLength')) LIMIT 1`).get();if(missing)throw new Error('备份缺少原件或成果，不能继续恢复。');
   const tables=['schema_versions','scopes','credentials','records','receipts','authorizations','outbox','quarantined_conflicts'];
+  for(const name of [...MODEL_TABLES,...MODEL_SERVICE_TABLES,...CHAT_TABLES,...RELAY_TABLES])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name))tables.push(name);
   const digest=createHash('sha256');for(const name of tables){digest.update(name);for(const row of db.prepare('SELECT * FROM '+name+' ORDER BY rowid').iterate())digest.update(payloadHash({...row}));}
   digest.update('raw_blobs');for(const row of db.prepare('SELECT owner_id,sha256,length(bytes) byteLength FROM raw_blobs ORDER BY rowid').iterate())digest.update(payloadHash({...row}));const contentHash=digest.digest('hex');
-  return {versions,contentHash,counts:db.prepare('SELECT kind,count(*) total FROM records GROUP BY kind ORDER BY kind').all().map(r=>({...r})),unresolved:db.prepare("SELECT count(*) n FROM records WHERE kind='operation' AND json_extract(body_json,'$.status') IN ('queued','running','unknown')").get().n};
+  const chatUnresolved=tables.includes('chat_requests')?db.prepare("SELECT count(*) n FROM chat_requests WHERE status IN ('queued','running','unknown')").get().n:0;
+  return {versions,contentHash,counts:db.prepare('SELECT kind,count(*) total FROM records GROUP BY kind ORDER BY kind').all().map(r=>({...r})),unresolved:db.prepare("SELECT count(*) n FROM records WHERE kind='operation' AND json_extract(body_json,'$.status') IN ('queued','running','unknown')").get().n+chatUnresolved+(tables.includes('model_execution_calls')?db.prepare("SELECT count(*) n FROM model_execution_calls WHERE status IN ('running','unknown')").get().n:0)};
  }finally{db.close();}
 }
 function copyFiles(source,target,files){for(const f of files){const to=join(target,f.path);mkdirSync(dirname(to),{recursive:true,mode:0o700});copyFileSync(join(source,f.path),to);chmodSync(to,f.executable?0o700:0o600);}}

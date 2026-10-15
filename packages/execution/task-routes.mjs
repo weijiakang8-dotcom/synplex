@@ -1,3 +1,4 @@
+import {routeEstimate} from './route-estimate.mjs';
 import {ProtocolError,payloadHash} from '../contracts/validate.mjs';
 import {selectExecution} from './selection.mjs';
 
@@ -12,7 +13,9 @@ function assignmentsFor(plan,choices,raw){
   ids.add(a.nodeId);return {nodeId:a.nodeId,...selectExecution({model:a.model,effort:a.effort},choices,{})};
  }).sort((a,b)=>plan.nodes.findIndex(n=>n.id===a.nodeId)-plan.nodes.findIndex(n=>n.id===b.nodeId));
 }
-function priceReference(assignment,prices,at){
+function priceReference(assignment,prices,at,choices){
+ const personal=choices.find(c=>c.id===assignment.model)?.pricing;
+ if(personal){const effective=Date.parse(personal.validFrom)<=at&&(personal.validUntil===null||at<Date.parse(personal.validUntil));return {price:effective?personal:null,reason:effective?'versioned_price':'price_not_effective'};}
  const candidates=prices.filter(p=>p.model===assignment.model&&p.provider===assignment.provider);
  const matches=candidates.filter(p=>Date.parse(p.validFrom)<=at&&(p.validUntil===null||at<Date.parse(p.validUntil)));
  if(matches.length!==1)return {price:null,reason:matches.length?'price_conflict':candidates.length?'price_not_effective':'price_unknown'};
@@ -31,7 +34,8 @@ export function compareTaskRoutes({plan,packet,choices,prices,assignments,quoted
  const seen=new Set(),routes=[];
  for(const variant of variants){
   const signature=payloadHash(variant.assignments);if(seen.has(signature))continue;seen.add(signature);
-  routes.push({...variant,id:signature,assignments:variant.assignments.map(a=>({...a,...priceReference(a,prices,Date.parse(quotedAt))})),
+  const priced=variant.assignments.map(a=>({...a,...priceReference(a,prices,Date.parse(quotedAt),choices)}));
+  routes.push({...variant,id:signature,assignments:priced,estimate:routeEstimate(priced,choices,packet,plan),
    estimatedUsd:null,estimatedSeconds:null,qualityStatus:'unmeasured',
    notice:'只调整尚未准备的步骤，已提交的设置和成果保持不变。这里只比较执行设置和已确认单价。总费用、完成时间及交付质量尚无足够依据；失败、返工和补充问答也会产生用量，不计为零。'});
  }
