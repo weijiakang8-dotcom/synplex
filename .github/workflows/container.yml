@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '26.11.0'
+          node-version: '26.11.1'
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Linux workspace and HTTP boundaries
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '26.11.0'
+          node-version: '26.11.1'
       - name: Build reproducible workspace image
         run: docker build -f deploy/Dockerfile -t synplex:ci .
       - name: Protected container, pairing and exact original roundtrip
