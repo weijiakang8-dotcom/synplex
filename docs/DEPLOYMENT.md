@@ -79,6 +79,8 @@ docker compose --project-name synplex-full --env-file /private/path/deployment.e
 docker compose --project-name synplex-full --env-file /private/path/deployment.env -f deploy/compose.full.yml up -d
 ```
 
+腾讯云服务器访问 Debian 主站缓慢时，可在构建命令追加 `--build-arg SYNPLEX_APT_MIRROR=mirrors.cloud.tencent.com`，改用腾讯云的 Debian 镜像传输；Debian 签名与包校验保留，Python/Node 锁和 pgvector 来源校验不变。默认仍使用 Debian 主站，其他镜像地址会被拒绝。
+
 完整部署的工作台资料位于容器内 `/var/lib/synplex/workspace`，执行后台与数据库位于同一私有卷中的独立目录。先登录受保护工作台，在“任务 → 模型设置”添加连接，再开始真实任务。网站不会自动取得运营者本机的账号、模型或邮件凭据。维护者刷新原所有者的一次性入口可用相同 Compose 命令的 `exec workspace node services/workspace/connect.mjs`，读取工作台子目录的入口。公开首页包含动态星空，并尊重系统的“减少动态效果”。
 
 目前 `deploy/deploy-synplex` 是既有资料工作台的受限发布入口；不能把它当成完整后台迁移器。完整部署首次切站需管理员按现场代理、私有配置和备份操作，不能只推送源码就宣称线上已有执行能力。CI 会构建并验证完整后台，不替代服务器的切流授权与模型设置。
