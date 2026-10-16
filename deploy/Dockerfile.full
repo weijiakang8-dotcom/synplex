@@ -20,12 +20,14 @@ RUN curl --fail --location --retry 2 https://codeload.github.com/pgvector/pgvect
     && mkdir -p /vector-install/usr/share/doc/synplex-pgvector \
     && cp LICENSE /vector-install/usr/share/doc/synplex-pgvector/LICENSE
 FROM runtime-base
+ARG SYNPLEX_PYPI_INDEX=https://pypi.org/simple
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY vendor/agenthub/backend/requirements.lock /app/vendor/agenthub/backend/requirements.lock
-RUN python3 -m venv /opt/synplex-python \
-    && /opt/synplex-python/bin/pip install --no-cache-dir --no-deps -r /app/vendor/agenthub/backend/requirements.lock \
+RUN case "$SYNPLEX_PYPI_INDEX" in https://pypi.org/simple|https://mirrors.cloud.tencent.com/pypi/simple) ;; *) exit 2 ;; esac \
+    && python3 -m venv /opt/synplex-python \
+    && /opt/synplex-python/bin/pip install --index-url "$SYNPLEX_PYPI_INDEX" --require-hashes --no-cache-dir --no-deps -r /app/vendor/agenthub/backend/requirements.lock \
     && /opt/synplex-python/bin/pip check
 COPY --chown=node:node vendor/agenthub /app/vendor/agenthub
 COPY --chown=node:node public public
