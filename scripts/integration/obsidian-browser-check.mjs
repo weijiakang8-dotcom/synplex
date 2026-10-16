@@ -30,7 +30,7 @@ try{
  for(const path of ['起点.md','阶段/转折.md'])await dialog.getByLabel(path,{exact:false}).check();
  await dialog.locator('#vault-import').click();await dialog.locator('#vault-error').filter({hasText:/\S/}).waitFor();
  assert.equal(repository.recordCount(auth,scope,'source'),1,'lost reply still saved the original once');
- await dialog.locator('#vault-import').click();await dialog.locator('#vault-status').filter({hasText:'已导入 2 篇'}).waitFor();assert.equal(uploads.length,3);
+ await dialog.locator('#vault-import').click();await dialog.locator('#vault-status').filter({hasText:'已保存 2 篇'}).waitFor();await app.service.idle();assert.equal(uploads.length,3);
  const index=repository.obsidianNotes(auth,scope);assert.equal(index.items.length,2);assert.equal(index.complete,true);const before=repository.recordCount(auth,scope,'claim');
  await dialog.locator('#vault-import').click();await dialog.locator('#vault-status').filter({hasText:'未变化 2 篇'}).waitFor();assert.equal(uploads.length,3);assert.equal(repository.recordCount(auth,scope,'claim'),before);
  await dialog.locator('#close-dialog').click();const source=index.items.find(n=>n.path==='起点.md');await page.locator(`[data-action=preview-source][data-id="${source.sourceId}"]`).click();await dialog.getByRole('button',{name:'为什么转向',exact:true}).waitFor();assert.match(await dialog.innerText(),/尚未导入，可从笔记库补充/);assert.equal(await dialog.locator('button').filter({hasText:'javascript'}).count(),0);
