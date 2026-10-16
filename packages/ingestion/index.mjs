@@ -6,6 +6,10 @@ export { PARSER_VERSION, TEXT_VERSION, EVENT_VERSION } from './parser.mjs';
 export const RULE_VERSION = 'synplex.literal-candidates/1.0.0';
 export const NO_MODEL_USAGE = Object.freeze({ observationScope: 'preparation_only', provider: null, model: null,
   inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, pricingRevision: null, provenance: 'no_model_call' });
+// Mutations still check revisions and current permissions in their transactions.
+// Import bookkeeping needs no full claim projection. Keep fallback for adapters.
+const cooperate=count=>count%16===0?new Promise(resolve=>setImmediate(resolve)):Promise.resolve();
+const revision=repo=>typeof repo.getRevision==='function'?repo.getRevision():repo.getState();
 const inputFields = ['bytes','format','sourceSystem','formatVersion','sessionId','eventId','occurredAt','importOrigin'];
 function validateInput(repo, input, meta) {
   if (!input || !(input.bytes instanceof Uint8Array) || Object.keys(input).some(k => !inputFields.includes(k)) ||
@@ -61,14 +65,14 @@ export async function importSource(repo, input, meta) {
     normalizedTextHash: result.normalizedTextHash, blocks: result.blocks, coverage: result.coverage };
   // Reuse the parser receipt across separate uploads of identical material.
   const parsedReply = await repo.appendParsedRevisions([parsedInput],
-    { requestId: request(payloadHash({ scope: repo.scope, parsedInput }),'p'), expectedStateRevision: (await repo.getState()).stateRevision });
+    { requestId: request(payloadHash({ scope: repo.scope, parsedInput }),'p'), expectedStateRevision: (await revision(repo)).stateRevision });
   const parsed = parsedReply.value[0];
   const base = { sourceId: source.id, parsedRevisionId: parsed.id, externalSystem: metadata.sourceSystem, formatVersion: metadata.formatVersion,
     sessionId: metadata.sessionId, eventId: metadata.eventId, seq: null, importOrigin: metadata.importOrigin,
     occurredAt: metadata.occurredAt, payloadHash: source.sha256 };
   const native=!!result.parserVersion&&Array.isArray(result.records),events=native?result.records.map(({blockIds,...record})=>({...base,...record})): [base];
   const occurrenceReply = events.length?await repo.appendOccurrences(events,
-    { requestId: request(meta.requestId,'o'), expectedStateRevision: (await repo.getState()).stateRevision }):{value:[],operationId:parsedReply.operationId};
+    { requestId: request(meta.requestId,'o'), expectedStateRevision: (await revision(repo)).stateRevision }):{value:[],operationId:parsedReply.operationId};
   const occurrences = [...occurrenceReply.value];
   const byBlock=new Map(native?result.records.flatMap((r,i)=>r.blockIds.map(id=>[id,occurrences[i]])):parsed.blocks.map(b=>[b.id,occurrences[0]]));
   const warnings = result.documentNotice ? [warning(result.coverage.status==='partial'?'partial_parse':'unsupported_format',result.documentNotice,'查看已提取文字并结合原文件核对；读取失败时可拆分或转换为文字后导入。')] : result.coverage.status === 'partial' ? [warning('partial_parse', '只解析了有效区段，原件及全部未处理字节仍保存。', '查看未读取的内容范围，补充可读取的文字。')] :
@@ -77,19 +81,22 @@ export async function importSource(repo, input, meta) {
     warnings.push(warning('conflict','原文件已保存；这份资料已锁定，没有重新整理或覆盖旧记录。','如需修改，可手工编辑现有记录，或在名称与分类中明确解除锁定。'));
     return validateWire('ImportResponse',{source,parsed,occurrences,operationId:occurrenceReply.operationId,warnings});
   }
+  let processedChunks=0;
   for (const block of parsed.blocks) for (const chunk of native&&result.candidateEligible.get(block.id)===false?[]:candidateChunks(block)) {
+    // Yield to uploads, progress reads and other user operations during a large note.
+    await cooperate(++processedChunks);
     const occurrence=byBlock.get(block.id);if(!occurrence)continue;
     if (!chunk.text.trim()) continue;
     const chunkHash = payloadHash({ blockId: block.id, start: chunk.start, end: chunk.end, text: chunk.text });
     const stableRoot = payloadHash({ scope: repo.scope, occurrenceId: occurrence.id, parser: parsed.parserVersion, rule: RULE_VERSION, chunkHash });
-    const state = await repo.getState();
+    const state = await revision(repo);
     const candidateReply = await repo.appendCandidates([candidate(block,chunk,source,parsed,occurrence,result.coverage.status !== 'complete',native?result.roles.get(block.id):null)],
       { requestId: request(stableRoot,'c'), expectedStateRevision: state.stateRevision });
     const priorKey = chunkCacheKey({ scope: repo.scope, sourceId: source.id, occurrenceId: occurrence.id, chunkHash,
       permissionRevision: state.permissionRevision, stateRevision: candidateReply.stateRevision,parserVersion:parsed.parserVersion });
     const prior = await repo.getChunkCheckpoint(priorKey);
     if (prior?.status === 'succeeded' && prior.candidateIds.length === candidateReply.value.length && prior.candidateIds.every((id,i) => id === candidateReply.value[i].id)) continue;
-    const current = await repo.getState();
+    const current = await revision(repo);
     const cacheKey = chunkCacheKey({ scope: repo.scope, sourceId: source.id, occurrenceId: occurrence.id, chunkHash,
       permissionRevision: current.permissionRevision, stateRevision: current.stateRevision,parserVersion:parsed.parserVersion });
     const existing = await repo.getChunkCheckpoint(cacheKey);

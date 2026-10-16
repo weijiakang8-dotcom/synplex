@@ -57,6 +57,7 @@ test('email registration, password login, restart, exact tenant/project/model/so
  const move=cookie=>cookie.replace(/^synplex_ui_\d+=/,'synplex_ui_'+new URL(url).port+'=');
  alpha.cookie=move(sessionBefore);beta.cookie=move(secondCookie);
  assert.equal((await bootstrap(alpha.cookie)).body.projects.length,1);assert.deepEqual((await bootstrap(beta.cookie)).body.scope,selectedScope);
+ const betaLogin=await post('auth/login',{email:'beta@example.com',password:'synthetic-password'});assert.equal(betaLogin.status,200);assert.deepEqual((await bootstrap(betaLogin.cookie)).body.scope,selectedScope,'重新登录保留上次使用的本人项目');
  const bad=await post('auth/login',{email:'ALPHA@example.com',password:'wrong-password'});assert.equal(bad.status,403);
  const login=await post('auth/login',{email:' ALPHA@example.com ',password:'synthetic-password'});assert.equal(login.status,200);assert.equal((await bootstrap(login.cookie)).status,200);
  assert.equal((await post('auth/logout',{},login.cookie)).status,200);assert.equal((await bootstrap(login.cookie)).status,403);

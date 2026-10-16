@@ -874,6 +874,50 @@
         },
         "chatReference": {
           "$ref": "#/$defs/ChatReference"
+        },
+        "sourceReferences": {
+          "type": "array",
+          "maxItems": 24,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "sourceId",
+              "occurrenceId",
+              "blockId",
+              "title",
+              "path"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "occurrenceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "blockId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
         }
       },
       "required": [

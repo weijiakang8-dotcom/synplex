@@ -9,8 +9,8 @@ import{WorkspaceRepository}from'../../services/workspace/repository.mjs';
 import{acquireWorkspaceLease}from'./workspace-lease.mjs';
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const identity=email=>String(email).trim().toLowerCase();
-function idle(db){
- const queries=["SELECT 1 FROM records WHERE kind='operation' AND json_extract(body_json,'$.status') IN ('queued','running','unknown') LIMIT 1","SELECT 1 FROM chat_requests WHERE status IN ('queued','running','unknown') LIMIT 1","SELECT 1 FROM model_execution_calls WHERE status IN ('running','unknown') LIMIT 1"];
+function idle(db,{archiveIncompleteChats=false}={}){
+ const queries=["SELECT 1 FROM records WHERE kind='operation' AND json_extract(body_json,'$.status') IN ('queued','running','unknown') LIMIT 1",archiveIncompleteChats?"SELECT 1 FROM chat_requests WHERE status IN ('queued','running') OR status='unknown' AND json_extract(body_json,'$.finishedAt') IS NULL LIMIT 1":"SELECT 1 FROM chat_requests WHERE status IN ('queued','running','unknown') LIMIT 1","SELECT 1 FROM model_execution_calls WHERE status IN ('running','unknown') LIMIT 1"];
  for(const q of queries)if(db.prepare(q).get())throw Error('仍有执行或费用需要核对，未迁移，也不会重新执行。');
 }
 function rows(db,table,where='',args=[]){return db.prepare(`SELECT * FROM ${table} ${where} ORDER BY rowid`).all(...args);}
@@ -20,10 +20,10 @@ function legacyIdentity(db,directory){
  const credential=db.prepare("SELECT c.actor_id,s.owner_id,s.scope_json FROM credentials c JOIN scopes s ON s.partition=c.partition WHERE c.token_hash=? AND c.kind='ui' AND c.revoked=0").get(hash(token));
  if(!credential)throw Error('原私人工作台身份未通过核对。');return{id:'legacy-private',...credential};
 }
-export function exportHistory(directory,email,{legacy=false}={}){
+export function exportHistory(directory,email,{legacy=false,archiveIncompleteChats=false}={}){
  const db=new DatabaseSync(join(directory,'workspace.sqlite'),{readOnly:true});
  try{
-  db.exec('BEGIN');idle(db);
+  db.exec('BEGIN');idle(db,{archiveIncompleteChats});
   const a=legacy?legacyIdentity(db,directory):db.prepare('SELECT id,owner_id,actor_id,scope_json FROM workspace_accounts WHERE lower(email)=? AND active=1').get(identity(email));
   if(!a)throw Error('原工作台没有这个邮箱的账号。');
   const scopes=rows(db,'scopes','WHERE owner_id=?',[a.owner_id]),partitions=scopes.map(x=>x.partition);
@@ -61,8 +61,10 @@ function importRows(db,bundle,account){
  }
  for(const row of bundle.records){let value={...row,partition:mapping.get(row.partition)};
   if(row.kind==='execution_job'){const body={...JSON.parse(row.body_json),archiveOrigin:{kind:'completed_history',fingerprint:bundle.sha256}};value={...value,body_json:JSON.stringify(body),payload_hash:payloadHash(body)};}
+  if(row.kind==='execution_job'){const prior=db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='execution_job' AND id=?").get(value.partition,value.id);if(prior){const {archiveOrigin:oldOrigin,...oldBody}=JSON.parse(prior.body_json),{archiveOrigin:newOrigin,...newBody}=JSON.parse(value.body_json);if(oldOrigin&&payloadHash(oldBody)===payloadHash(newBody))continue;}}
   insertExact(db,'records',value,['partition','kind','id']);
  }
+ for(const s of bundle.scopes)db.prepare('UPDATE scopes SET state_revision=max(state_revision,?) WHERE partition=?').run(s.state_revision,mapping.get(s.partition));
  for(const b of bundle.blobs)insertExact(db,'raw_blobs',{owner_id:account.owner_id,sha256:b.sha256,bytes:Buffer.from(b.bytes,'base64')},['owner_id','sha256']);
  for(const c of bundle.conversations)insertExact(db,'chat_conversations',{...c,partition:mapping.get(c.partition),actor_id:account.actor_id},['id']);
  for(const r of bundle.requests)insertExact(db,'chat_requests',r,['id']);
@@ -85,11 +87,11 @@ function appendProjects(repository,directory,account,bundle){
  }
  const temp=file+'.'+randomUUID()+'.tmp';writeFileSync(temp,JSON.stringify(catalog,null,2)+'\n',{mode:0o600,flag:'wx'});renameSync(temp,file);
 }
-export function importHistory(directory,bundle){
- verifyBundle(bundle);const lease=acquireWorkspaceLease(directory),receiptDir=join(directory,'history-imports'),receipt=join(receiptDir,bundle.sha256+'.json');let db,repository;
+export function importHistory(directory,bundle,{archiveIncompleteChats=false}={}){
+ verifyBundle(bundle);if(!archiveIncompleteChats&&bundle.requests.some(r=>r.status==='unknown'))throw Error('导出包含未完整返回的历史对话，需要明确选择保留未完成记录；不会重新发送。');const lease=acquireWorkspaceLease(directory),receiptDir=join(directory,'history-imports'),receipt=join(receiptDir,bundle.sha256+'.json');let db,repository;
  try{
   if(existsSync(receipt))return JSON.parse(readFileSync(receipt,'utf8'));
-  db=new DatabaseSync(join(directory,'workspace.sqlite'));db.exec('PRAGMA foreign_keys=ON;BEGIN IMMEDIATE');idle(db);
+  db=new DatabaseSync(join(directory,'workspace.sqlite'));db.exec('PRAGMA foreign_keys=ON;BEGIN IMMEDIATE');idle(db,{archiveIncompleteChats});
   const a=db.prepare('SELECT id,owner_id,actor_id FROM workspace_accounts WHERE lower(email)=? AND active=1').get(identity(bundle.email));
   if(!a)throw Error('目标站点没有相同邮箱的账号，未导入。');
   if(!existsSync(join(directory,'accounts',a.id,'projects.json')))throw Error('目标账号尚未建立项目入口。');

@@ -52,11 +52,11 @@ export function createAccounts({repository,dataDir,localProjects,allowExecution=
    account=await store.register(input,ip,owner);
   }else if(action==='login'){account=await accountLogin(store,input,ip);}
   else throw accountError('没有这个账号操作。',404);
-  const projects=projectsFor(account);await projects.select(projects.rootAuth,account.scope);
-  store.revoke(tokenFrom(req,port));const token=store.issue(account);
+  const projects=projectsFor(account),selected=await projects.preferred(projects.rootAuth);
+  store.revoke(tokenFrom(req,port));const token=store.issue(account,selected.scope);
   send(res,action==='register'?201:200,{account:info(account)},setCookie(res,port,token));return true;
  }
- return {handle,session,admin:auth=>store.admin(auth),selectSession:(value,scope)=>{if(value.sessionHash)store.select(value.sessionHash,scope);},
+ return {handle,session,admin:auth=>store.admin(auth),selectSession:async(value,scope)=>{if(value.sessionHash){await value.projects.remember(value.rootAuth,scope);store.select(value.sessionHash,scope);}},
   async recover(recover){for(const account of store.accounts()){const manager=projectsFor(account);for(const p of await manager.list(manager.rootAuth)){const selected=await manager.select(manager.rootAuth,p.scope);await recover(selected);}}},
   metadata:value=>({enabled:true,account:value?.account??null,canClaimLocal:!!claimOwner(value)})};
 }

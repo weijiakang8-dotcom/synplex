@@ -106,6 +106,30 @@ export class SearchIndex {
    const event=this.read(partition,'occurrence',value.id);if(event)this.occurrence(partition,event.value);
   }else if(kind==='claim')this.claim(partition,value);
  }
+ ranked(partition,{terms,occurrenceIds,limit}) {
+  this.ensureCurrent();
+  const selected=occurrenceIds.length?JSON.stringify(occurrenceIds):null;
+  // A bounded term list; scan only this project's indexed text, never all tenants.
+  // Include titles/paths, so a focused project note beats an incidental phrase.
+  const weights=terms.map(()=>"(CASE WHEN instr(d.normalized_text,?)>0 THEN 1 ELSE 0 END + CASE WHEN instr(lower(coalesce(json_extract(m.body_json,'$.title'),f.name,'')),?)>0 THEN 4 ELSE 0 END)").join('+');
+  if(!weights)return [];
+  const rows=this.db.prepare(`WITH candidates AS (
+   SELECT d.*,o.body_json occurrence_json,
+    coalesce(json_extract(m.body_json,'$.title'),f.name,'项目资料') title,
+    CASE WHEN json_valid(json_extract(j.body_json,'$.metadata.sessionId')) THEN json_extract(json_extract(j.body_json,'$.metadata.sessionId'),'$.path') ELSE NULL END path,
+    (${weights}${terms.includes('实测')?"+CASE WHEN d.body_text GLOB '*[0-9]*' AND (instr(d.body_text,'|')>0 OR instr(d.body_text,'%')>0) THEN 8 ELSE 0 END":''}) score
+   FROM search_documents d
+   JOIN search_occurrences l ON l.document_id=d.id AND l.partition=d.partition
+   JOIN records o ON o.partition=d.partition AND o.kind='occurrence' AND o.id=l.occurrence_id
+   LEFT JOIN records m ON m.partition=d.partition AND m.kind='source_metadata' AND m.id=d.source_id
+   LEFT JOIN (SELECT partition,id,json_extract(body_json,'$.name') name FROM records WHERE kind='source_filename') f ON f.partition=d.partition AND f.id=d.source_id
+   LEFT JOIN records j ON j.partition=d.partition AND j.kind='import_job' AND j.id=(SELECT z.id FROM records z WHERE z.partition=d.partition AND z.kind='import_job' AND json_extract(z.body_json,'$.sourceId')=d.source_id ORDER BY z.rowid DESC LIMIT 1)
+   WHERE d.partition=? AND (? IS NULL OR l.occurrence_id IN (SELECT value FROM json_each(?)))
+  ), grouped AS (
+   SELECT *,row_number() OVER(PARTITION BY source_id ORDER BY score DESC,id DESC) position FROM candidates WHERE score>0
+  ) SELECT * FROM grouped WHERE position<=6 ORDER BY score DESC,id DESC LIMIT ?`).all(...terms.flatMap(t=>[t,t]),partition,selected,selected,limit);
+  return rows;
+ }
  find(partition,query,offset) {
   this.ensureCurrent();
   const lower=query.query.toLocaleLowerCase(),long=Array.from(lower).length>=3;

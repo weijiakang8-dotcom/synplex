@@ -18,6 +18,8 @@ export class LocalProjects {
   async #check(rootAuth){if(rootAuth!==this.rootAuth)denied();await this.repository.forScope(rootAuth,rootAuth.authorizedScope);}
   #save(){const temporary=this.file+'.'+randomUUID()+'.tmp';writeFileSync(temporary,JSON.stringify(this.catalog,null,2)+'\n',{mode:0o600,flag:'wx'});renameSync(temporary,this.file);}
   async list(rootAuth){await this.#check(rootAuth);return this.catalog.entries.filter(p=>p.status!=='creating').map(({scope,name})=>({scope:structuredClone(scope),name}));}
+  async preferred(rootAuth){return this.select(rootAuth,this.catalog.preferredScope??rootAuth.authorizedScope);}
+  async remember(rootAuth,scope){await this.select(rootAuth,scope);this.catalog.preferredScope=structuredClone(scope);this.#save();}
   async launch(auth,scope){
     // A launcher renews this human's exact existing scope; it cannot select another project.
     if(auth.kind!=='ui'||auth.ownerId!==this.rootAuth.ownerId||auth.actorId!==this.rootAuth.actorId||!auth.capabilities.has('review_memory'))denied();

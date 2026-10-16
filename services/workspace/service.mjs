@@ -124,7 +124,7 @@ export class WorkspaceService {
       const { bytes, blob } = await repo.getBlob(job.sourceId);
       this.repository.importProgress(auth, scope, operationId, 'running');
       if (typeof this.modules.ingestion?.importSource !== 'function') unavailable('资料解析');
-      const guarded = Object.freeze(Object.fromEntries(['getState','saveBlob','getBlob','getSourceMetadata','appendParsedRevisions','appendOccurrences','appendCandidates','queryEvidence','listOccurrences','getChunkCheckpoint','saveChunkCheckpoint','getOperation','getImportResult'].map(name => [name, async (...args) => {
+      const guarded = Object.freeze(Object.fromEntries(['getState','getRevision','saveBlob','getBlob','getSourceMetadata','appendParsedRevisions','appendOccurrences','appendCandidates','queryEvidence','listOccurrences','getChunkCheckpoint','saveChunkCheckpoint','getOperation','getImportResult'].map(name => [name, async (...args) => {
         if (['saveBlob','appendParsedRevisions','appendOccurrences','appendCandidates','saveChunkCheckpoint'].includes(name) &&
             this.repository.operation(auth,scope,operationId).status !== 'running') throw new ProtocolError('conflict','导入已中断，不能继续应用结果。','核对原回执。','lookup_operation');
         return repo[name](...args);
@@ -134,7 +134,7 @@ export class WorkspaceService {
       const work = this.modules.ingestion.importSource(guarded,
         { bytes, format: blob.format, sourceSystem: job.metadata.sourceSystem, formatVersion: job.metadata.formatVersion,
           sessionId: job.metadata.sessionId, eventId: job.metadata.eventId, occurredAt: job.metadata.occurredAt, importOrigin: 'user_upload' },
-        { requestId: `import:${operationId}`, expectedStateRevision: (await repo.getState()).stateRevision });
+        { requestId: `import:${operationId}`, expectedStateRevision: (await repo.getRevision()).stateRevision });
       let parsed;
       try { parsed=await Promise.race([work,timeout]); } finally { clearTimeout(timer); }
       validateWire('ImportResponse', { ...parsed, operationId });

@@ -3,7 +3,7 @@ import {errorText} from './user-copy.js';
 import {outputTablePreview} from './output-table.js';
 import {effortLabel} from './execution-selection.js';
 
-const labels={queued:'等待回复',running:'正在回复',completed:'已完成',stopped:'已停止',failed:'未发送',unknown:'需要核对',reviewed:'已保留记录'};
+const labels={queued:'等待回复',running:'正在回复',completed:'已完成',stopped:'已停止',failed:'未完成',unknown:'需要核对',reviewed:'已保留记录'};
 const storageKey=scope=>'synplex-chat:'+JSON.stringify(scope);
 const read=(storage,key)=>{try{return JSON.parse(storage.getItem(key)||'null');}catch{return null;}};
 const save=(storage,key,value)=>{try{storage.setItem(key,JSON.stringify(value));}catch{/* Server remains authoritative. */}};
@@ -11,7 +11,7 @@ function modelChoices(connections){return connections.filter(c=>c.enabled).flatM
 function backgroundCard(value,esc){
   const packet=value.background;if(!packet)return '';
   const records=[...packet.facts,...packet.failures,...packet.lessons,...packet.candidates];
-  return `<details class="chat-background"><summary>本次参考 · ${records.length} 条记录</summary>${records.map(c=>`<article><p>${esc(c.body)}</p><small>${c.reviewStatus==='confirmed'?'已确认':'待核对'} · ${esc(c.title)}</small></article>`).join('')||'<p class="subtle">没有加入项目记录。</p>'}${packet.unknowns.map(n=>`<p class="subtle">${esc(n)}</p>`).join('')}${value.historyLimited?'<p class="subtle">本次带入最近20轮完整对话，更早的记录仍保留。</p>':''}</details>`;
+  return `<details class="chat-background"><summary>本次参考 · ${records.length} 条记录、${packet.sourceReferences?.length||0} 份资料</summary>${records.map(c=>`<article><p>${esc(c.body)}</p><small>${c.reviewStatus==='confirmed'?'已确认':'待核对'} · ${esc(c.title)}</small></article>`).join('')||'<p class="subtle">没有加入项目记录。</p>'}${packet.unknowns.map(n=>`<p class="subtle">${esc(n)}</p>`).join('')}${(packet.sourceReferences||[]).map(ref=>`<article><button type="button" data-action="preview-source" data-id="${esc(ref.sourceId)}" data-ai-key="chat-source:${esc(ref.label)}">${esc(ref.label+' · '+ref.title)}</button><small>${esc(ref.path||'项目资料')}</small></article>`).join('')}${value.historyLimited?'<p class="subtle">本次带入最近20轮完整对话，更早的记录仍保留。</p>':''}</details>`;
 }
 function messageMarkup(items,esc){
   return items.map(item=>`<article class="chat-turn" data-chat-request="${esc(item.id)}" data-ai-id="chat-request:${esc(item.id)}" data-ai-role="conversation_turn" data-ai-state="${esc(item.status)}"><section class="chat-user"><h3>你</h3><p class="excerpt">${esc(item.content)}</p></section><section class="chat-answer"><h3>Synplex <span class="tag">${labels[item.status]||'需要核对'}</span></h3>${item.answer?outputTablePreview({text:item.answer,name:'回复.md',mediaType:'text/markdown'},esc):`<p class="subtle" role="status">${['queued','running'].includes(item.status)?'正在等待回复…':'这次没有完整回复。'}</p>`}<small>${esc(item.notice)}</small>${['queued','running'].includes(item.status)?'<button type="button" data-chat-action="stop" data-ai-action="chat_stop">停止</button>':''}${item.status==='unknown'?'<p class="notice">这次回复与费用尚需核对。请先查看服务商记录，不要重新发送原问题。</p><button type="button" data-chat-action="review" data-ai-action="chat_review">已核对，保留记录</button>':''}${backgroundCard(item,esc)}${item.usage?`<details><summary>本次用量</summary><p>输入 ${item.usage.inputTokens??'未知'}，输出 ${item.usage.outputTokens??'未知'}。${esc(modelCostText(item.usage,item.selection.priceSnapshot,item.createdAt))}。</p></details>`:''}</section></article>`).join('');

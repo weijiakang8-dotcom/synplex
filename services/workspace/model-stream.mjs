@@ -35,7 +35,7 @@ export function createModelDecoder({stream,onText}){
       pending+=decoder.decode();
       if(stream){if(pending.trim())event(pending);if(!finished)throw modelFailure('模型回复中断，已有内容保留。');}
       else{const value=JSON.parse(pending);if(value.error)throw modelFailure('模型未接受这次请求。');text(responseText(value));usage=probeUsage(value.usage);receipt=value.id??null;truncated=value.choices?.[0]?.finish_reason==='length'||value.status==='incomplete';}
-      if(!output)throw modelFailure('模型没有返回可显示的回复。');return {usage,providerReceipt:receipt,truncated};
+      if(!output&&!truncated)throw modelFailure('模型没有返回可显示的回复。');return {usage,providerReceipt:receipt,truncated,...(!output?{empty:true}:{})};
     },
   };
 }

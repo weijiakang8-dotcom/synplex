@@ -10,6 +10,10 @@ const file=(bytes,name,extra={})=>({bytes,headers:{'Content-Type':'application/o
  'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(name)}`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...extra}});
 const read=(keys,handler,valid=i=>keys.every(k=>typeof i[k]==='string'),optional=[])=>({keys,handler,valid,optional});
 const routes={
+ ui_pending_page:read(['cursor'],({repository,auth,input:i})=>json(repository.pendingPage(auth,i.scope,i.cursor)),i=>i.cursor===null||typeof i.cursor==='string'&&i.cursor.length<=2048),
+ ui_materials_page:read(['cursor'],({repository,auth,input:i})=>json(repository.materialPage(auth,i.scope,i.cursor)),i=>i.cursor===null||typeof i.cursor==='string'&&i.cursor.length<=2048),
+ ui_import_status:read([],({repository,auth,input:i})=>json(repository.importStatus(auth,i.scope))),
+ ui_project_revision:read([],({repository,auth,input:i})=>json(repository.revision(auth,i.scope))),
  ui_obsidian_notes:read([],({repository,auth,input:i})=>json(repository.obsidianNotes(auth,i.scope))),
  ui_expression_versions:read([],({repository,auth,input:i})=>json(repository.expressionVersions(auth,i.scope))),
  ui_expression_version:read(['versionId'],({repository,auth,input:i})=>json(repository.expressionVersion(auth,i.scope,i.versionId))),

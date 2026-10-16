@@ -169,7 +169,7 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
       if(req.method==='GET'&&path==='/api/v1/ui_bootstrap'){
         if(!uiSession||auth.kind!=='ui')throw denied();
         const repo=await repository.forScope(auth,uiSession.scope);
-        return send(res,200,{scope:uiSession.scope,state:await repo.getState(),capabilities:capabilityInfo(auth,uiSession.scope),projects:projectManager?await projectManager.list(uiSession.rootAuth):null,...(accounts?{authentication:accounts.metadata(uiSession)}:{})});
+        return send(res,200,{scope:uiSession.scope,state:repository.state(auth,uiSession.scope,{pendingLimit:100}),capabilities:capabilityInfo(auth,uiSession.scope),projects:projectManager?await projectManager.list(uiSession.rootAuth):null,...(accounts?{authentication:accounts.metadata(uiSession)}:{})});
       }
       if(req.method==='POST'&&path==='/api/v1/ui_logout'){
         if(uiSession?.sessionHash)throw wireFail('validation_failed','请从账号入口退出登录。','使用退出登录按钮。');
@@ -271,8 +271,8 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         if(Object.keys(input).sort().join(',')!==(creating?'name,protocolVersion,requestId,scope':'protocolVersion,scope'))throw denied();
         if(creating)await projectManager.select(uiSession.rootAuth,input.scope);
         const chosen=creating?await projectManager.create(uiSession.rootAuth,input):await projectManager.select(uiSession.rootAuth,input.scope);
-        accounts?.selectSession(uiSession,chosen.scope);uiSession.auth=chosen.auth;uiSession.scope=chosen.scope;
-        return send(res,200,{scope:chosen.scope,state:await (await repository.forScope(chosen.auth,chosen.scope)).getState(),projects:await projectManager.list(uiSession.rootAuth)});
+        await accounts?.selectSession(uiSession,chosen.scope);uiSession.auth=chosen.auth;uiSession.scope=chosen.scope;
+        return send(res,200,{scope:chosen.scope,state:repository.state(chosen.auth,chosen.scope,{pendingLimit:100}),projects:await projectManager.list(uiSession.rootAuth)});
       }
       if(path==='/api/v1/ui_find_evidence'){
         if(auth.kind!=='ui'||Object.keys(input).sort().join(',')!=='cursor,includeHistory,limit,protocolVersion,query,scope'||input.protocolVersion!==PROTOCOL_VERSION||input.cursor!==null&&(typeof input.cursor!=='string'||input.cursor.length>4096))throw denied();
@@ -285,13 +285,13 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
       }
       if(path==='/api/v1/ui_history'){
         if(auth.kind!=='ui'||Object.keys(input).sort().join(',')!=='protocolVersion,scope'||input.protocolVersion!==PROTOCOL_VERSION)throw denied();
-        const repo=await repository.forScope(auth,input.scope),state=await repo.getState();
+        const pendingPage=repository.pendingPage(auth,input.scope),state=repository.state(auth,input.scope,{pendingLimit:100});state.pending=pendingPage.items;
         // Bounded UI projection, never an execution or mutation endpoint.
         const claims=repository.recent(auth,input.scope,'claim');
-        const sources=repository.recent(auth,input.scope,'source');
+        const materialPage=repository.materialPage(auth,input.scope),sources=materialPage.sources;
         const events=repository.recent(auth,input.scope,'occurrence');
         const runs=repository.recent(auth,input.scope,'run',100),results=repository.recent(auth,input.scope,'result',100);
-        const totals={claims:repository.recordCount(auth,input.scope,'claim'),events:repository.recordCount(auth,input.scope,'occurrence')};
+        const totals={sources:repository.recordCount(auth,input.scope,'source'),claims:repository.recordCount(auth,input.scope,'claim'),events:repository.recordCount(auth,input.scope,'occurrence')};
         const artifactFiles=repository.recent(auth,input.scope,'artifact_file');
         const sourceCoverage=repository.sourceCoverage(auth,input.scope,sources.map(s=>s.id));
         const executions=repository.recent(auth,input.scope,'execution_job',100).map(job=>repository.executionState(auth,input.scope,job.id));
@@ -304,7 +304,7 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         const modelCalls=Object.fromEntries(executions.map(x=>[x.operation.id,modelRelay?.calls(auth,input.scope,x.operation.id)??[]]));
         const taskSteps=repository.recent(auth,input.scope,'task_step',100);
         const sourceMetadata=sources.map(s=>repository.sourceMetadata(auth,input.scope,s.id));
-        return send(res,200,{state,claims,sources,sourceCoverage,events,runs,results,totals,modelCalls,artifactFiles,resultReviews,resultRequirements,executions,latestWork,conflicts,usage,budget,taskPlans,taskSteps,sourceMetadata,sourcePreviewPages:true,materialQuestions:true,taskFollowups:true,taskResultAdoption:true,claimVersionActions:true,materialBriefs:true,recordJourney:true,resultVersionActions:true,artifactPreviews:true,noteExports:true,projectExpressions:true,projectExpressionVersions:true,executionStatus:repository.executionStatus(auth,input.scope),diagnostics:diagnosticStatus(diagnostics)});
+        return send(res,200,{pendingCursor:pendingPage.cursor,pendingTotal:pendingPage.total,sourceCursor:materialPage.cursor,importStatus:repository.importStatus(auth,input.scope),state,claims,sources,sourceCoverage,events,runs,results,totals,modelCalls,artifactFiles,resultReviews,resultRequirements,executions,latestWork,conflicts,usage,budget,taskPlans,taskSteps,sourceMetadata,sourcePreviewPages:true,materialQuestions:true,taskFollowups:true,taskResultAdoption:true,claimVersionActions:true,materialBriefs:true,recordJourney:true,resultVersionActions:true,artifactPreviews:true,noteExports:true,projectExpressions:true,projectExpressionVersions:true,executionStatus:repository.executionStatus(auth,input.scope),diagnostics:diagnosticStatus(diagnostics)});
       }
       if(path==='/api/v1/ui_reconcile_usage'){
         if(auth.kind!=='ui')throw denied();

@@ -69,3 +69,7 @@ async function sendModelRequest(resolver,send,proxyResolver,{endpoint,path,secre
 
 export const createModelTransport=({resolver=lookup,send=request,proxyResolver=resolveProxyHostname}={})=>input=>sendModelRequest(resolver,send,proxyResolver,input);
 export const modelRequest=createModelTransport();
+
+// Streaming envelopes may be much larger than the visible answer. Keep a hard
+// bound tied to the already-authorized output, including hidden reasoning.
+export const modelTransferLimits=tokens=>({timeoutMs:180000,maxBytes:Math.min(32*1024*1024,Math.max(2*1024*1024,tokens*1024))});

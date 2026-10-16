@@ -59,5 +59,16 @@ test('stream decoder ignores hidden reasoning, preserves Unicode splits and dete
   for(let i=0;i<bytes.length;i+=7)decoder.push(bytes.subarray(i,i+7));assert.equal(decoder.finish().usage.inputTokens,3);assert.equal(answer,'你好');
   const broken=createModelDecoder({stream:true,onText:()=>{}});broken.push(Buffer.from('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));assert.throws(()=>broken.finish(),/中断/);
   const limited=createModelDecoder({stream:true,onText:()=>{}});limited.push(Buffer.from('data: {"choices":[{"delta":{"content":"部分内容"},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}\n\ndata: [DONE]\n\n'));assert.equal(limited.finish().truncated,true);assert.equal(limited.evidence().usage.outputTokens,2);
+  const emptyLimited=createModelDecoder({stream:true,onText:()=>assert.fail('hidden reasoning must stay hidden')});emptyLimited.push(Buffer.from('data: {"choices":[{"delta":{"reasoning_content":"private"},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":256}}\n\ndata: [DONE]\n\n'));assert.equal(emptyLimited.finish().empty,true);assert.equal(emptyLimited.evidence().usage.outputTokens,256);
   const responses=createModelDecoder({stream:true,onText:t=>answer=t});responses.push(Buffer.from('data: {"type":"response.output_text.delta","delta":"新版回复"}\n\ndata: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":4,"output_tokens":2}}}\n\n'));assert.equal(responses.finish().providerReceipt,'r1');assert.equal(answer,'新版回复');
+});
+
+test('DNS preflight failure is a known unsent failure; output transfer bounds include streaming envelopes',async()=>{
+ const {modelTransferLimits}=await import('../../services/workspace/model-network.mjs');
+ const {modelConnectionFailure}=await import('../../services/workspace/model-error.mjs');
+ assert.equal(modelTransferLimits(16384).maxBytes,16*1024*1024);assert.equal(modelTransferLimits(1000000).maxBytes,32*1024*1024);
+ const dir=mkdtempSync(join(tmpdir(),'synplex-chat-dns-')),r=new WorkspaceRepository({dataDir:dir});
+ const c=r.createCredential({ownerId:'owner',actorId:'human',scope,kind:'ui',capabilities:['read_memory','prepare_task','review_memory']}),auth=r.authenticate(c.token),chat=r.chat(auth,scope),connection=r.models(auth,scope).save({requestId:'model',config,secret:'synthetic-test-key'});
+ const {ChatService}=await import('../../services/workspace/chat-service.mjs');let calls=0;const service=new ChatService({repository:r,transport:async()=>{calls++;const e=modelConnectionFailure('fakeDns');e.requestSent=false;throw e;}});
+ try{const conversation=chat.create('dns'),value=await service.send(auth,{scope,conversationId:conversation.id,requestId:'dns-message',content:'问候',selection:{connectionId:connection.id,model:'fixture-model',effort:null},excludedClaimIds:[]}),result=await terminal(r,auth,value.id);assert.equal(result.status,'failed');assert.match(result.notice,/本次没有发送给模型/);assert.equal(result.usage,null);assert.equal(calls,1);}finally{await service.close();r.close();rmSync(dir,{recursive:true,force:true});}
 });

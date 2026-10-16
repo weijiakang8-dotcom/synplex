@@ -193,7 +193,7 @@ export class WorkspaceRepository {
     const check=(capability='read_memory')=>{const t=this.#currentAuth(auth,scope,capability);if(t.kind!=='ui')denied();return t;};
     check();
     return scopedChat(this.#chatStore,{check,release:id=>this.#modelVault.release(auth,id),verifyBackground:background=>{
-      const state=this.state(auth,scope);
+      const state=this.revision(auth,scope);
       if(state.stateRevision!==background.stateRevision||state.permissionRevision!==background.permissionRevision)fail('stale_context','参考资料已经变化，本次还没有发送给模型。','查看最新资料后重新准备。');
     }});
   }
@@ -320,9 +320,17 @@ export class WorkspaceRepository {
     if (row.input_hash !== payloadHash(input)) fail('conflict', '同一请求标识对应了不同内容。', '核对原回执，新的操作请明确使用新标识。', 'never');
     return { ...JSON.parse(row.reply_json), duplicate: true };
   }
-  state(auth, scope) {
+  revision(auth, scope) {
+    const t=this.#currentAuth(auth,scope,'read_memory'),row=this.#row(t.partition);
+    return {scope:clone(scope),stateRevision:row.state_revision,permissionRevision:row.permission_revision};
+  }
+  chunkCheckpoint(auth,scope,key) {
+    const t=this.#currentAuth(auth,scope,'read_memory');
+    return this.#identity(t.partition,'checkpoint',key);
+  }
+  state(auth, scope, {pendingLimit=null}={}) {
     const trusted = this.#currentAuth(auth, scope, 'read_memory');
-    const current = this.#row(trusted.partition), claims = this.#db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')!='rejected' ORDER BY rowid").all(trusted.partition).map(r=>JSON.parse(r.body_json));
+    const current = this.#row(trusted.partition), claims = this.#db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')!='rejected' AND (? IS NULL OR json_extract(body_json,'$.reviewStatus')!='pending' OR rowid IN (SELECT rowid FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')='pending' ORDER BY rowid DESC LIMIT ?)) ORDER BY rowid").all(trusted.partition,pendingLimit,trusted.partition,pendingLimit??Number.MAX_SAFE_INTEGER).map(r=>JSON.parse(r.body_json));
     const active = type => claims.filter(c => c.type === type && c.lifecycle === 'active' && c.reviewStatus === 'confirmed');
     const resolved = new Set(this.#list(trusted.partition, 'conflict_resolution').map(r => r.conflictId));
     const conflicts = this.#db.prepare('SELECT id FROM quarantined_conflicts WHERE partition=? ORDER BY recorded_at').all(trusted.partition)
@@ -768,6 +776,28 @@ export class WorkspaceRepository {
       return { value: clone(claim) };
     });
   }
+  sourceDescriptions(auth,scope,ids){
+    const t=this.#currentAuth(auth,scope,'read_memory');if(!Array.isArray(ids)||ids.length>24)denied();
+    return ids.map(id=>{if(!this.#get(t.partition,'source',id))denied();const meta=this.sourceMetadata(auth,scope,id),file=this.#get(t.partition,'source_filename',id);
+      const row=this.#db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='import_job' AND json_extract(body_json,'$.sourceId')=? ORDER BY rowid DESC LIMIT 1").get(t.partition,id),job=row&&JSON.parse(row.body_json),identity=job&&readNoteIdentity(job.metadata.sessionId);
+      return {sourceId:id,title:meta.title||file?.name||'项目资料',path:identity?.path??null};});
+  }
+  retrieveContext(auth,scope,{terms,occurrenceIds=[],limit=48}) {
+    const t=this.#currentAuth(auth,scope,'read_memory');
+    if(!Array.isArray(terms)||terms.length>24||terms.some(x=>typeof x!=='string'||!x.length||x.length>80)||!Array.isArray(occurrenceIds)||occurrenceIds.some(id=>!this.#get(t.partition,'occurrence',id))||!Number.isInteger(limit)||limit<1||limit>48)denied();
+    return this.#transaction(()=>this.#search.ranked(t.partition,{terms,occurrenceIds,limit}).map(row=>{
+      const occurrence=JSON.parse(row.occurrence_json),text=row.body_text;
+      const matches=terms.map(term=>({term,index:text.toLowerCase().indexOf(term)})).filter(x=>x.index>=0);
+      // Prefer the densest bounded passage, keeping exact UTF-16 offsets.
+      let center=matches[0]?.index??0,best=-1;
+      for(const m of matches){const n=matches.filter(x=>Math.abs(x.index-m.index)<500).length;if(n>best){best=n;center=m.index;}}
+      let start=Math.max(0,center-120),end=Math.min(text.length,start+1000);
+      if(start>0&&/[\uDC00-\uDFFF]/.test(text[start]))start--;
+      if(end<text.length&&/[\uD800-\uDBFF]/.test(text[end-1]))end--;
+      const quote=text.slice(start,end),span={sourceId:row.source_id,parsedRevisionId:row.parsed_id,occurrenceId:occurrence.id,blockId:row.block_id,start,end,offsetUnit:'utf16_code_unit',quote,quoteHash:sha256(Buffer.from(quote))};
+      return {span,title:row.title,path:row.path??null,score:row.score};
+    }));
+  }
   query(auth, scope, query) {
     return this.#transaction(()=>this.#query(auth,scope,query));
   }
@@ -833,6 +863,25 @@ export class WorkspaceRepository {
       const { kind, ...operation } = stored;
       return { ownerId: trusted.ownerId, scope, kind, operation, result: operation.resultId ? this.#get(trusted.partition, 'import_result', operation.resultId) : null };
     })).body;
+  }
+  pendingPage(auth,scope,cursor=null){
+    const t=this.#currentAuth(auth,scope,'read_memory'),queryHash=payloadHash({view:'pending',limit:100});
+    const offset=this.#decodeCursor(cursor,t.partition,queryHash);
+    const rows=this.#db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')='pending' ORDER BY rowid DESC LIMIT 101 OFFSET ?").all(t.partition,offset);
+    const total=this.#db.prepare("SELECT count(*) n FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')='pending'").get(t.partition).n;
+    return {items:rows.slice(0,100).map(r=>JSON.parse(r.body_json)),total,cursor:rows.length>100?this.#encodeCursor(t.partition,queryHash,offset+100):null};
+  }
+  materialPage(auth,scope,cursor=null){
+    const t=this.#currentAuth(auth,scope,'read_memory'),queryHash=payloadHash({view:'materials',limit:100});
+    const offset=this.#decodeCursor(cursor,t.partition,queryHash);
+    const rows=this.#db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='source' ORDER BY rowid DESC LIMIT 101 OFFSET ?").all(t.partition,offset);
+    const sources=rows.slice(0,100).map(r=>JSON.parse(r.body_json)).reverse();
+    return {sources,sourceMetadata:sources.map(s=>this.sourceMetadata(auth,scope,s.id)),sourceCoverage:this.sourceCoverage(auth,scope,sources.map(s=>s.id)),cursor:rows.length>100?this.#encodeCursor(t.partition,queryHash,offset+100):null};
+  }
+  importStatus(auth,scope){
+    const t=this.#currentAuth(auth,scope,'read_memory');
+    const rows=this.#db.prepare("SELECT json_extract(body_json,'$.status') status,count(*) count FROM records WHERE partition=? AND kind='operation' AND json_extract(body_json,'$.kind')='import_source' GROUP BY status").all(t.partition);
+    return {counts:Object.fromEntries(rows.map(r=>[r.status,r.count])),sources:this.recordCount(auth,scope,'source')};
   }
   obsidianNotes(auth,scope){
     const {partition}=this.#currentAuth(auth,scope,'read_memory');
@@ -1629,6 +1678,7 @@ export class ScopedRepository {
   #auth;
   constructor(repository, auth, scope) { this.#repository = repository; this.#auth = auth; this.scope = Object.freeze(scope); Object.freeze(this); }
   async getState() { return this.#repository.state(this.#auth, this.scope); }
+  async getRevision() { return this.#repository.revision(this.#auth,this.scope); }
   async getClaimJourney(id) { return this.#repository.claimDetail(this.#auth,this.scope,id); }
   async taskConflicts(selectedOccurrenceIds) { return this.#repository.taskConflicts(this.#auth, this.scope, selectedOccurrenceIds); }
   async saveBlob(input, meta) { return this.#repository.saveBlob(this.#auth, this.scope, input, meta); }
@@ -1637,9 +1687,11 @@ export class ScopedRepository {
   async appendParsedRevisions(input, meta) { return this.#repository.appendParsed(this.#auth, this.scope, input, meta); }
   async appendOccurrences(input, meta) { return this.#repository.appendOccurrences(this.#auth, this.scope, input, meta); }
   async appendCandidates(input, meta) { return this.#repository.appendCandidates(this.#auth, this.scope, input, meta); }
+  async sourceDescriptions(ids) { return this.#repository.sourceDescriptions(this.#auth,this.scope,ids); }
+  async retrieveContext(query) { return this.#repository.retrieveContext(this.#auth,this.scope,query); }
   async queryEvidence(query) { return this.#repository.query(this.#auth, this.scope, query); }
   async listOccurrences(query) { return this.#repository.listOccurrences(this.#auth, this.scope, query); }
-  async getChunkCheckpoint(key) { return this.#repository.list(this.#auth, this.scope, 'checkpoint').find(x => x.cacheKey === key) ?? null; }
+  async getChunkCheckpoint(key) { return this.#repository.chunkCheckpoint(this.#auth,this.scope,key); }
   async saveChunkCheckpoint(value, meta) { return this.#repository.checkpoint(this.#auth, this.scope, value, meta); }
   async getOperation(id) { return this.#repository.operation(this.#auth, this.scope, id); }
   async getImportResult(id) { return this.#repository.importResult(this.#auth, this.scope, id); }

@@ -1,3 +1,4 @@
+import {addSourceEvidence,completeReferenceIndex} from './retrieval.mjs';
 import {addRecordHistory} from './record-history.mjs';
 import { randomUUID } from 'node:crypto';
 import { PROTOCOL_VERSION, ProtocolError, validatePrepare, validateWire, payloadHash } from '../contracts/validate.mjs';
@@ -48,15 +49,16 @@ export async function prepareContext(repo,input,options) {
   if(excluded){packet.unknowns.push(`已按这次目标筛选背景，${excluded}条未匹配的确认信息或经验未加入；原记录未删除。关键词筛选可能漏掉相关内容，可手动选择资料。`);packet.coverage=packet.coverage==='needs_input'?'needs_input':'partial';}
   const unmatched=state.pending.filter(c=>inScope(c)&&!relevant(c)).length;
   if(unmatched){packet.unknowns.push(`${unmatched}条未匹配的待核对记录未加入，仍保留在资料和历史中。`);packet.coverage=packet.coverage==='needs_input'?'needs_input':'partial';}
-  const candidates=state.pending.filter(relevant).sort((a,b)=>{
+  const candidates=state.pending.filter(c=>inScope(c)&&(selected.size||!terms.length||score(c)>0)).sort((a,b)=>{
     return score(b)-score(a)||a.recordedAt.localeCompare(b.recordedAt)||a.id.localeCompare(b.id);
   });
+  const rawSpans=await addSourceEvidence(repo,packet,input.goal,[...selected],options.reservedTokens,estimatePacketTokens);
   // Reserve room for explicit coverage notices before considering optional material.
   if(candidates.length)packet.unknowns.push('待核对内容仅为原文线索，不代表已确认事实或执行授权。');
   let omitted=0;
   for(const candidate of candidates){
     const prior=packet.evidence;packet.candidates.push(candidate);packet.evidence=unique([...prior,...candidate.evidence]);
-    if(!fits()){packet.candidates.pop();packet.evidence=prior;omitted++;}
+    if(!fits()||estimatePacketTokens(packet)+options.reservedTokens+2000>input.maxInputTokens){packet.candidates.pop();packet.evidence=prior;omitted++;}
   }
   // Historical evidence preserves rejected/obsolete decisions without making them current facts.
   let historical=0,limited=false;const historicalSpans=[];
@@ -78,12 +80,13 @@ export async function prepareContext(repo,input,options) {
     packet.unknowns.push('历史检索按有限关键词进行，不保证找齐所有转折；没有依据的部分需继续核对。');}
   // Coverage notices are necessary too. A nearly full packet must shed optional
   // candidates whole before rejecting a goal that actually fits on its own.
+  await completeReferenceIndex(repo,packet,fits);
   if(!fits()&&packet.candidates.length){
     packet.unknowns.push('为保留完整要求和缺口说明，部分可选待核对内容未加入，原件仍可查询。');
     packet.coverage=packet.coverage==='needs_input'?'needs_input':'partial';
     while(!fits()&&packet.candidates.length){
       packet.candidates.pop();
-      packet.evidence=unique([...packet.facts,...packet.failures,...packet.lessons,...packet.candidates].flatMap(c=>c.evidence).concat(historicalSpans));
+      packet.evidence=unique([...packet.facts,...packet.failures,...packet.lessons,...packet.candidates].flatMap(c=>c.evidence).concat(rawSpans,historicalSpans));
     }
   }
   if(options.includeRecordHistory!==false)await addRecordHistory(repo,packet,fits);

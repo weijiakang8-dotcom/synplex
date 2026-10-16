@@ -72,11 +72,11 @@ export class AccountStore{
  accounts(){return this.db.prepare('SELECT id FROM workspace_accounts WHERE active=1').all().map(row=>this.account(row.id));}
  admin(auth){return !!this.db.prepare('SELECT 1 FROM workspace_accounts WHERE owner_id=? AND actor_id=? AND active=1').get(auth.ownerId,auth.actorId);}
  claimAvailable(ownerId){return !this.db.prepare('SELECT 1 FROM workspace_accounts WHERE owner_id=?').get(ownerId);}
- issue(account){
+ issue(account,scope=account.scope){
   const proof=this.#passwordProof.get(account),row=this.db.prepare('SELECT password_hash FROM workspace_accounts WHERE id=? AND active=1').get(account.id);
   if(!row||proof&&proof!==row.password_hash)throw accountError('密码已更新，请使用新密码重新登录。',403);
   this.db.prepare('DELETE FROM account_sessions WHERE expires_at<=?').run(this.clock());
-  const token=randomBytes(32).toString('hex');this.db.prepare('INSERT INTO account_sessions VALUES(?,?,?,?)').run(digest(token),account.id,JSON.stringify(account.scope),this.clock()+ACCOUNT_SESSION_SECONDS*1000);return token;
+  const token=randomBytes(32).toString('hex');this.db.prepare('INSERT INTO account_sessions VALUES(?,?,?,?)').run(digest(token),account.id,JSON.stringify(scope),this.clock()+ACCOUNT_SESSION_SECONDS*1000);return token;
  }
  session(token){
   if(typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token))return null;

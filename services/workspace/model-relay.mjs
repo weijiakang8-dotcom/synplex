@@ -1,7 +1,7 @@
 import {payloadHash} from '../../packages/contracts/validate.mjs';
 import {connectionPrice} from './model-pricing.mjs';
 import {modelFailure} from './model-contract.mjs';
-import {modelRequest} from './model-network.mjs';
+import {modelRequest,modelTransferLimits} from './model-network.mjs';
 import {probeUsage} from './model-service.mjs';
 
 export const modelChoiceId=(connectionId,model)=>connectionId+'.'+payloadHash(model);
@@ -63,7 +63,7 @@ export class ModelRelay{
     const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)controller.abort();
     let resolveDone;const done=new Promise(resolve=>{resolveDone=resolve;});this.#active.set(reserved.value.id,{controller,done});const chunks=[];let total=0;
     try{
-      await this.#transport({endpoint:profile.endpoint,path,secret:profile.secret,body:request,signal:controller.signal,onChunk:bytes=>{total+=bytes.length;if(total>2*1024*1024)throw modelFailure('模型回复超过本次容量。');chunks.push(Buffer.from(bytes));}});
+      await this.#transport({endpoint:profile.endpoint,path,secret:profile.secret,body:request,signal:controller.signal,...modelTransferLimits(grant.binding.maxOutputTokens),onChunk:bytes=>{total+=bytes.length;if(total>modelTransferLimits(grant.binding.maxOutputTokens).maxBytes)throw modelFailure('模型回复超过本次容量。');chunks.push(Buffer.from(bytes));}});
       const bytes=Buffer.concat(chunks),observed=evidence(bytes,request.stream===true);if(!observed.completed&&!observed.truncated)throw modelFailure('原模型回复尚未完整返回。');
       const contentType=request.stream?'text/event-stream':'application/json';this.#store.finish(reserved.value.id,{status:'completed',...observed,response:bytes,contentType});return {bytes,contentType,replayed:false};
     }catch{let observed={};try{observed=evidence(Buffer.concat(chunks),request.stream===true);}catch{}this.#store.finish(reserved.value.id,{status:'unknown',...observed});throw modelFailure('原模型回复尚需核对，已有记录保留。','不会自动重试或更换模型。','conflict');}

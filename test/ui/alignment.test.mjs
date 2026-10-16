@@ -53,7 +53,7 @@ test('全部显式页面按钮具有处理分支；弹窗复用同一处理器',
  const code=readFileSync(new URL('../../public/app.js',import.meta.url),'utf8');
  const directory=new URL('../../public/',import.meta.url),templates=readdirSync(directory).filter(f=>f.endsWith('.js')).map(f=>readFileSync(new URL(f,directory),'utf8')).join('\n');
  const actions=[...new Set([...templates.matchAll(/data-action="([a-z-]+)"/g)].map(x=>x[1]))];
- const handler=code.slice(code.indexOf('async function handleClick(e){'),code.indexOf("app.addEventListener('click',handleClick)"));
+ const handler=code.slice(code.indexOf('async function loadOlderMaterials(button){'),code.indexOf("app.addEventListener('click',handleClick)"));
  const grouped=[...handler.matchAll(/\[([^\]]+)\]\.includes\(button\.dataset\.action\)/g)].flatMap(x=>[...x[1].matchAll(/'([a-z-]+)'/g)].map(m=>m[1]));
  for(const action of actions)assert.ok(handler.includes("button.dataset.action==='"+action+"'")||grouped.includes(action)||FILE_ACTIONS.includes(action)&&handler.includes('await fileActions.handle(button)')||PAGE_ACTIONS.includes(action)&&handler.includes('if(pageClick(e))return;')&&code.includes('pages.act(scope,button.dataset.action,button.dataset.id)'),'按钮缺少真正的点击处理分支：'+action);
  assert.match(code,/dialog.addEventListener\('click',handleClick\)/);

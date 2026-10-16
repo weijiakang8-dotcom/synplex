@@ -7,7 +7,7 @@ import {bindModelUsageReview,executionModelUsage} from '../../public/model-usage
 import {createChatTask} from '../../public/chat-task.js';
 import {bindModelSettings,modelSettingsButton} from '../../public/model-settings.js';
 import {taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice} from '../../public/task-preparation.js';
-import {traceError,supportMessage,runtimeStatusCard} from '../../public/runtime-status.js';
+import {traceError,supportMessage,runtimeStatusCard,importStatusCard} from '../../public/runtime-status.js';
 import {createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS} from '../../public/workspace-pages.js';
 import {bindPageFinder} from '../../public/page-finder.js';
 import test from 'node:test';
@@ -39,7 +39,7 @@ function page(view, executions = [], fixture = {}) {
     businessNavigation,collaborationContext,accountStorage,isAccountPage,accountControls,accountLogoutLabel,createAccountUI:()=>({show:async()=>{app.innerHTML=connectionScreen();}}),
     obsidianImportButton,bindObsidianImport(){},connectionScreen,showStartupFailure,bindModelUsageReview,executionModelUsage,taskChatReferenceField,chatReferenceCard,createChatTask,bindModelSettings,modelSettingsButton,bindPageFinder,bindInputMethodGuard(){},createWorkspaceLayout(){return {capture(){},attach(){},clear(){}};},approvalDetails,questionAction,questionHelp,waitingLabel,
     taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice,TASK_STATUS, taskTitle, activityText, executionActivity, systemText, readableText, errorText, backgroundNote, fileLabel, modelControls,usageCard,budgetCard,conflictCard,conflictTitle,readConflictChoice,uploadFormat,sourceExtension,documentExtension,planEditor,taskPlanCards,revisionForm,stepNote,followupForm,conversationCard,currentQuestion,originalGoal,
-    traceError,supportMessage,runtimeStatusCard,createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS,createFileActions,observeActions(){},captureResultForms,restoreResultForms,claimEditor,sourceEditor,categoryFilter,AUTHORING_REQUESTS,pendingAuthoring,authoringRecovery,sourceBriefDialog,claimVersionDialog,claimComparison,metadataHistory,resultSelectionRecovery,bindResultSelection,selectedResultNeedsReview,
+    traceError,supportMessage,runtimeStatusCard,importStatusCard,createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS,createFileActions,observeActions(){},captureResultForms,restoreResultForms,claimEditor,sourceEditor,categoryFilter,AUTHORING_REQUESTS,pendingAuthoring,authoringRecovery,sourceBriefDialog,claimVersionDialog,claimComparison,metadataHistory,resultSelectionRecovery,bindResultSelection,selectedResultNeedsReview,
     document: { querySelector: s => s === '#app' ? app : node, createElement: () => node,
       body: { append() {} }, addEventListener() {} },
     sessionStorage: { getItem: () => null, setItem(){}, removeItem(){},length:0 },
