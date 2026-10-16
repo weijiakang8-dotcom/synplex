@@ -16,6 +16,7 @@ test('account page addresses, purpose labels and links stay separate, including 
   }
   const html=accountForm(mode,'person@example.com',{mailReady:true});
   assert.ok(html.includes(`data-account-mode="${mode}"`));assert.ok(html.includes('<nav aria-label="账号入口">'));
+  assert.ok(html.indexOf('</form>')<html.indexOf('<nav aria-label="账号入口">'),'secondary account links follow the form and submit button');
   assert.equal(html.includes('name="username"'),mode==='register');
   assert.equal(html.includes('获取注册验证码'),mode==='register');
   assert.equal(html.includes('获取重置验证码'),mode==='reset');
