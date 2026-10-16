@@ -83,7 +83,7 @@ bindObsidianImport({app,dialog,request,getScope:()=>scope,storage:storage,esc,on
 const pageFinder=bindPageFinder({document,dialog,esc,getScope:()=>scope,canNavigate:()=>!busy&&!!history&&!!document.querySelector('#workspace-main'),navigate:id=>{view=id;render();document.querySelector('[role=tab][aria-selected=true]')?.focus();}});
 const fileActions=createFileActions({dialog,esc,request,notify,saveFile,getScope:()=>scope,canExport:()=>history.noteExports,
  getHistory:()=>history,getProjectTitle:()=>projects?.find(p=>p.scope.projectId===scope.projectId)?.name||'项目介绍',
- storage:storage,setBusy,getExecutors:()=>capabilities.executors||[],savedMutation,questionPrepared:work=>{prepared=work;dialog.close();view='task';render();},
+ storage:storage,setBusy,getExecutors:()=>capabilities.executors||[],savedMutation,questionPrepared:work=>{prepared=work;dialog.close();openExecutionTask();render();},
  beginPreview:()=>({revision:renderRevision,generation:++artifactDialogGeneration,scope:structuredClone(scope)}),
  previewCurrent:t=>t.revision===renderRevision&&t.generation===artifactDialogGeneration&&JSON.stringify(t.scope)===JSON.stringify(scope)});
 const planDraftKey=runId=>'synplex-plan-draft:'+JSON.stringify(scope)+':'+runId;
@@ -119,6 +119,7 @@ const empty=(title,description)=>`<div class="empty"><span class="empty-mark">�
 const humanNote=backgroundNote;
 const heading=(title,desc,button='')=>`<div class="page-heading" data-ai-context="heading"><div class="heading-title"><h1>${title}</h1>${hint(desc)}</div>${button}</div>`;
 function materialQuestionButton(history,id){return history.materialQuestions?`<button class="text-button" data-action="ask-material" data-id="${esc(id)}" data-ai-action="ask_material" data-tip="带上这份资料提问，之后由你决定是否开始">提问</button>`:'';}
+function openExecutionTask(){chatTask.selectMode('execute');view='task';}
 function selectedProjectName(){return projects?.find(p=>p.scope.projectId===scope.projectId)?.name||'我的项目';}
 function ensureExecutorChoice(){if(draft.executor==='synplex'&&!capabilities.executors?.some(x=>x.owner==='synplex'))draft.executor='current_host';}
 function render(){
@@ -241,6 +242,7 @@ function pageClick(e){
  if(!nav&&!entry&&!PAGE_ACTIONS.includes(button?.dataset.action))return false;
  if(busy){notify('当前正在保存，请稍候。');return true;}
  if(entry)chatTask.selectMode(entry.dataset.openTask);
+ if(nav?.dataset.nav==='task'&&pendingTaskPreparation(storage,scope))chatTask.selectMode('execute');
  view=entry?'task':nav?nav.dataset.nav:pages.act(scope,button.dataset.action,button.dataset.id);render();return true;
 }
 async function handleClick(e){
@@ -253,7 +255,7 @@ async function handleClick(e){
 
  if(button.dataset.action==='result-versions'){
   const pageAt=renderRevision,generation=++artifactDialogGeneration;button.disabled=true;const detail=await request('ui_result_versions',{resultId:button.dataset.id});button.disabled=false;if(pageAt!==renderRevision||generation!==artifactDialogGeneration)return;dialog.innerHTML=resultVersionDialog(detail,esc);dialog.querySelector('#close-dialog').onclick=()=>dialog.close();dialog.showModal();
-  const selection=bindResultSelection({dialog,detail,getPlans:()=>history.taskPlans||[],getScope:()=>scope,enabled:history.taskResultAdoption,savedMutation,notify,finish:()=>{view='task';render();},isCurrent:()=>pageAt===renderRevision&&generation===artifactDialogGeneration,esc});
+  const selection=bindResultSelection({dialog,detail,getPlans:()=>history.taskPlans||[],getScope:()=>scope,enabled:history.taskResultAdoption,savedMutation,notify,finish:()=>{openExecutionTask();render();},isCurrent:()=>pageAt===renderRevision&&generation===artifactDialogGeneration,esc});
   const bind=()=>bindArtifactComparison({dialog,request,esc,isCurrent:()=>pageAt===renderRevision&&generation===artifactDialogGeneration});bind();
   dialog.querySelector('#result-version-select').onchange=event=>{const other=detail.versions.find(r=>r.id===event.target.value);dialog.querySelector('#result-version-comparison').innerHTML=resultComparison(detail.versions.find(r=>r.id===detail.selectedResultId),other,esc);bind();selection();};
  }
@@ -314,7 +316,7 @@ async function handleClick(e){
    throw error;
   }finally{setBusy(false);render();}
  }
- if(button.dataset.action==='open-task-step'){prepared=await request('ui_task_detail',{runId:button.dataset.id});view='task';render();}
+ if(button.dataset.action==='open-task-step'){prepared=await request('ui_task_detail',{runId:button.dataset.id});openExecutionTask();render();}
  if(button.dataset.action==='step-result'){view='results';render();document.querySelector(`[data-ai-id="result:${button.dataset.id}"]`)?.scrollIntoView({block:'start'});}
  if(button.dataset.action==='logout'){await accountUI.logout(authentication);}
  if(button.dataset.action==='more-evidence'){button.disabled=true;const prior=searchResult,selected=JSON.stringify(scope),query=searchQuery;const page=await request('ui_find_evidence',{query,includeHistory:true,limit:20,cursor:prior.cursor});if(searchResult===prior&&JSON.stringify(scope)===selected){searchResult={...page,items:[...prior.items,...page.items]};render();}}
@@ -341,7 +343,7 @@ dialog.addEventListener('click',handleClick);
 async function prepareFollowupForm(form,data){
  prepared=await savedMutation('ui_prepare_followup',{resultId:form.dataset.result,question:String(data.get('question')).trim()},'synplex-pending-followup');
  if(form.elements.question.value===String(data.get('question')))form.elements.question.value='';
- view='task';notify('追问已准备好，点击开始才会执行；原成果仍保留。');
+ openExecutionTask();notify('追问已准备好，点击开始才会执行；原成果仍保留。');
 }
 async function prepareResultRevision(form,data){
   const resultId=form.dataset.result,instruction=String(data.get('instruction')).trim();if(!instruction)throw new Error('请写清需要修改的内容。');
@@ -350,7 +352,7 @@ async function prepareResultRevision(form,data){
   // this particular saved result, so only reuse a step that still selects it.
   let step=(history.taskSteps||[]).findLast(x=>x.runId===runId&&history.taskPlans?.find(p=>p.id===x.planId)?.nodes.some(n=>n.id===x.nodeId&&n.resultId===resultId)),planId=step?.planId,nodeId=step?.nodeId;
   if(!step){const original=await request('ui_task_detail',{runId}),plan={title:'任务修改',nodes:[{id:'step_1',title:'按新要求继续',instruction:'按本次修改要求继续，保留原任务目标、已有结果和交付要求。',acceptanceCriteria:original.packet.acceptanceCriteria,dependsOn:[],sideEffect:'isolated_files'}]};const created=await savedMutation('ui_create_task_plan',{baseRunId:runId,baseResultId:resultId,plan},'synplex-pending-revision-plan');planId=created.id;nodeId='step_1';}
-  prepared=await savedMutation('ui_prepare_step',{planId,nodeId,instruction,baseResultId:resultId},'synplex-pending-step');view='task';notify('修改说明已准备好。上一版保留，点击开始才会执行。');
+  prepared=await savedMutation('ui_prepare_step',{planId,nodeId,instruction,baseResultId:resultId},'synplex-pending-step');openExecutionTask();notify('修改说明已准备好。上一版保留，点击开始才会执行。');
 
 }
 app.addEventListener('submit',async e=>{
@@ -424,7 +426,7 @@ async function start(){
   else showStartupFailure(app,{error,describe:errorText,retry:start});
   return;
  }
- try{authentication=data.authentication??null;storage.bind(authentication?.account?.id??'local-owner');scope=data.scope;draft=loadDraft();view=pages.current(scope);state=data.state;capabilities=data.capabilities;projects=data.projects;await refresh();prepared=history.latestWork;const pending=JSON.parse(storage.getItem('synplex-pending-import')||'null');if(pending&&JSON.stringify(pending.scope)===JSON.stringify(scope)&&pending.operationId){const found=await request('get_import_result',{operationId:pending.operationId});if(!['queued','running','unknown'].includes(found.operation.status)){storage.removeItem('synplex-pending-import');notify('上次资料已有结果，请在资料或核对记录中查看。');}else notify('上次上传的文件已保存，但处理结果还需核对。请刷新查看，不要重复上传。');}render();}
+ try{authentication=data.authentication??null;storage.bind(authentication?.account?.id??'local-owner');scope=data.scope;draft=loadDraft();view=pages.current(scope);state=data.state;capabilities=data.capabilities;projects=data.projects;await refresh();prepared=history.latestWork;if(pendingTaskPreparation(storage,scope))chatTask.selectMode('execute');const pending=JSON.parse(storage.getItem('synplex-pending-import')||'null');if(pending&&JSON.stringify(pending.scope)===JSON.stringify(scope)&&pending.operationId){const found=await request('get_import_result',{operationId:pending.operationId});if(!['queued','running','unknown'].includes(found.operation.status)){storage.removeItem('synplex-pending-import');notify('上次资料已有结果，请在资料或核对记录中查看。');}else notify('上次上传的文件已保存，但处理结果还需核对。请刷新查看，不要重复上传。');}render();}
  catch(error){scope=null;showStartupFailure(app,{error,describe:errorText,retry:start});}
 }
 start();
