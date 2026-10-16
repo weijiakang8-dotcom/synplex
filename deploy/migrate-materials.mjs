@@ -38,7 +38,10 @@ export function migrateMaterials(snapshot,root,{port=5200}={}){
  }
  const recoveryFile=join(target,'recovery.json'),recovery=JSON.parse(readFileSync(recoveryFile,'utf8'));
  if(inspectDatabase(join(target,'workspace.sqlite')).contentHash!==manifest.data.contentHash)throw Error('迁移后数据不一致，执行保持停用。');
- writeFileSync(recoveryFile,JSON.stringify({...recovery,executorsEnabled:true,materialsOnlyMigration:receipt}),{mode:0o600});
+ // This is a fresh engine with imported materials, never an enabled recovery
+ // of an old engine. Retain the disabled restoration record as audit evidence.
+ writeFileSync(recoveryFile,JSON.stringify({...recovery,executorsEnabled:false,materialsOnlyMigration:receipt}),{mode:0o600});
+ renameSync(recoveryFile,join(target,'materials-recovery.json'));
  writeFileSync(receipt,JSON.stringify({status:'complete',snapshot,bootstrap,fingerprint:manifest.data.contentHash,modelCalls:0}),{mode:0o600});
  return {migrated:true,fingerprint:manifest.data.contentHash,bootstrap,modelCalls:0};
 }

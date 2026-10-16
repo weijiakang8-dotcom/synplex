@@ -42,6 +42,14 @@ export function validateWorkspaceHandoff(dataDir,proof,{complete=true}={}){
  return proof;
 }
 export function assertWorkspaceAdmission(dataDir){
+ const migration=join(dirname(dataDir),'materials-migration.json');
+ if(present(migration)){
+  const record=readHandoffJSON(migration);
+  if(record.status!=='complete'||typeof record.bootstrap!=='string'||!record.bootstrap.startsWith(dataDir+'.before-materials-')||typeof record.fingerprint!=='string'||!/^[a-f0-9]{64}$/.test(record.fingerprint))fail();
+  directory(record.bootstrap);
+  const audit=readHandoffJSON(join(dataDir,'materials-recovery.json'));
+  if(audit.executorsEnabled!==false||audit.materialsOnlyMigration!==migration||audit.snapshot!==record.snapshot)fail();
+ }
  if(present(join(dataDir,HANDOFF_RETIRED)))throw Error('这份原工作台已停止使用，请打开核对后的恢复副本；原资料仍保留。');
  const pending=join(dataDir,HANDOFF_PENDING),recovery=join(dataDir,'recovery.json');
  if(present(pending))validateWorkspaceHandoff(dataDir,readHandoffJSON(pending));
