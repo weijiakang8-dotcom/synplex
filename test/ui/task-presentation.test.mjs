@@ -1,3 +1,4 @@
+import {businessNavigation,collaborationContext} from '../../public/workspace-navigation.js';
 import {accountStorage} from '../../public/account-storage.js';
 import {isAccountPage} from '../../public/account-navigation.js';
 import {accountControls,accountLogoutLabel} from '../../public/accounts.js';
@@ -35,7 +36,7 @@ function page(view, executions = [], fixture = {}) {
   const app = { addEventListener() {}, querySelector(){return null;}, innerHTML: '' };
   const node = { addEventListener() {}, setAttribute() {}, classList: { add() {}, remove() {} } };
   const sandbox = {
-    accountStorage,isAccountPage,accountControls,accountLogoutLabel,createAccountUI:()=>({show:async()=>{app.innerHTML=connectionScreen();}}),
+    businessNavigation,collaborationContext,accountStorage,isAccountPage,accountControls,accountLogoutLabel,createAccountUI:()=>({show:async()=>{app.innerHTML=connectionScreen();}}),
     obsidianImportButton,bindObsidianImport(){},connectionScreen,showStartupFailure,bindModelUsageReview,executionModelUsage,taskChatReferenceField,chatReferenceCard,createChatTask,bindModelSettings,modelSettingsButton,bindPageFinder,bindInputMethodGuard(){},createWorkspaceLayout(){return {capture(){},attach(){},clear(){}};},approvalDetails,questionAction,questionHelp,waitingLabel,
     taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice,TASK_STATUS, taskTitle, activityText, executionActivity, systemText, readableText, errorText, backgroundNote, fileLabel, modelControls,usageCard,budgetCard,conflictCard,conflictTitle,readConflictChoice,uploadFormat,sourceExtension,documentExtension,planEditor,taskPlanCards,revisionForm,stepNote,followupForm,conversationCard,currentQuestion,originalGoal,
     traceError,supportMessage,runtimeStatusCard,createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS,createFileActions,observeActions(){},captureResultForms,restoreResultForms,claimEditor,sourceEditor,categoryFilter,AUTHORING_REQUESTS,pendingAuthoring,authoringRecovery,sourceBriefDialog,claimVersionDialog,claimComparison,metadataHistory,resultSelectionRecovery,bindResultSelection,selectedResultNeedsReview,

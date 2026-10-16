@@ -23,7 +23,7 @@ export function verifyModelData(db,dataDir){
   catch{throw modelFailure('模型连接与安全资料不一致，尚未完成备份核对。','请保留原目录和原密钥，从完整备份恢复。','conflict');}
 }
 export class ModelVault{
-  #db;#dataDir;
+  #db;#dataDir;#platformOwner=null;
   constructor(db,dataDir){
     this.#db=db;this.#dataDir=dataDir;
     db.exec(`CREATE TABLE IF NOT EXISTS model_connections(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,actor_id TEXT NOT NULL,kind TEXT NOT NULL,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,config_json TEXT NOT NULL,secret TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -31,6 +31,7 @@ export class ModelVault{
       CREATE TABLE IF NOT EXISTS model_connection_receipts(owner_id TEXT NOT NULL,actor_id TEXT NOT NULL,request_id TEXT NOT NULL,input_hash TEXT NOT NULL,result_json TEXT NOT NULL,PRIMARY KEY(owner_id,actor_id,request_id));
       CREATE TABLE IF NOT EXISTS model_connection_holds(id TEXT PRIMARY KEY,connection_id TEXT NOT NULL REFERENCES model_connections(id),revision INTEGER NOT NULL,owner_id TEXT NOT NULL,actor_id TEXT NOT NULL,released INTEGER NOT NULL DEFAULT 0);`);
   }
+  configureBuiltinOwner(ownerId){if(this.#platformOwner!==null&&this.#platformOwner!==ownerId)throw Error("Builtin owner is already fixed");this.#platformOwner=ownerId;}
   #key(create=false){
     if(create&&!existsSync(join(this.#dataDir,'model-vault-key'))&&this.#db.prepare('SELECT 1 FROM model_connections LIMIT 1').get())throw modelFailure('模型连接的安全资料缺失。','请保留现有连接，并从完整备份恢复。','capability_unavailable');
     return privateMaster(this.#dataDir,create);
@@ -51,7 +52,7 @@ export class ModelVault{
   }
   #usable(auth,id){
     const row=this.#db.prepare('SELECT * FROM model_connections WHERE id=? AND deleted=0').get(id);
-    if(!row||!row.enabled||row.owner_id!==auth.ownerId||row.kind!=='builtin'&&row.actor_id!==auth.actorId)throw modelFailure('这个模型连接不可用。','请选择可用模型或检查自己的连接。','scope_denied');return row;
+    if(!row||!row.enabled||row.owner_id!==auth.ownerId&&!(row.kind==='builtin'&&row.owner_id===this.#platformOwner)||row.kind!=='builtin'&&row.actor_id!==auth.actorId)throw modelFailure('这个模型连接不可用。','请选择可用模型或检查自己的连接。','scope_denied');return row;
   }
   #idle(row){if(this.#db.prepare('SELECT 1 FROM model_connection_holds WHERE connection_id=? AND released=0 LIMIT 1').get(row.id))throw modelFailure('仍有任务在使用这份模型连接。','请先结束或核对原任务，再修改连接。','conflict');}
   #mutation(auth,requestId,input,fn){
@@ -65,7 +66,7 @@ export class ModelVault{
       const value=fn();this.#db.prepare('INSERT INTO model_connection_receipts VALUES(?,?,?,?,?)').run(auth.ownerId,auth.actorId,requestId,hash,JSON.stringify(value));this.#db.exec('COMMIT');return value;
     }catch(error){this.#db.exec('ROLLBACK');throw error;}
   }
-  list(auth){return this.#db.prepare("SELECT * FROM model_connections WHERE deleted=0 AND owner_id=? AND (kind='builtin' OR actor_id=?) ORDER BY created_at,id").all(auth.ownerId,auth.actorId).map(row=>this.#public(row));}
+  list(auth){return this.#db.prepare("SELECT * FROM model_connections WHERE deleted=0 AND ((owner_id=? AND (kind='builtin' OR actor_id=?)) OR (owner_id=? AND kind='builtin')) ORDER BY CASE WHEN owner_id=? AND kind='builtin' THEN 0 ELSE 1 END,created_at,id").all(auth.ownerId,auth.actorId,this.#platformOwner,this.#platformOwner).map(row=>({...this.#public(row),canManage:row.owner_id===auth.ownerId&&row.actor_id===auth.actorId,platformDefault:row.kind==='builtin'&&row.owner_id===this.#platformOwner}));}
   save(auth,{requestId,id=null,revision=null,kind='personal',config,secret},admin=false){
     const checked=validateConnection(config);if(secret!==null)validateSecret(secret);
     if(!['personal','builtin'].includes(kind)||kind==='builtin'&&!admin)throw modelFailure('没有内置模型的管理权限。','请添加自己的模型。','scope_denied');

@@ -3,7 +3,8 @@ const STORAGE_KEY='synplex-layout';
 const defaults=()=>({navigation:218,task:360,collapsed:false,taskOpen:true});
 const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
 export function layoutGeometry(width,value,hasTask){
- const desktop=width>=1180,navigation=width>900?(value.collapsed?64:clamp(value.navigation,180,320)):180;
+ const desktop=width>=960,navigationMax=desktop?Math.min(320,width-712):320;
+ const navigation=width>900?(value.collapsed?64:clamp(value.navigation,180,navigationMax)):180;
  const taskMax=Math.min(520,Math.max(280,width-navigation-420-12));
  return {desktop,navigation,task:clamp(value.task,280,taskMax),taskMax,split:desktop&&hasTask&&value.taskOpen};
 }
@@ -47,7 +48,7 @@ export function createWorkspaceLayout(storage,window){
   navigation.classList.add('workspace-navigation');main.classList.add('workspace-main');
   toggle.setAttribute('aria-expanded',String(!value.collapsed));toggle.textContent=value.collapsed?'›':'‹';
   const label=value.collapsed?'展开导航':'收起导航';toggle.setAttribute('aria-label',label);toggle.dataset.tip=label;
-  taskToggle.hidden=!panel||!size.desktop;taskToggle.textContent=size.split?'收起进度':'展开进度';
+  taskToggle.hidden=!panel||!size.desktop;taskToggle.textContent=size.split?'收起侧栏':'展开侧栏';
   taskToggle.setAttribute('aria-expanded',String(size.split));side.hidden=!size.split;
   left.hidden=window.innerWidth<=900||value.collapsed;right.hidden=!size.split;
   range(left,180,320,size.navigation);range(right,280,size.taskMax,size.task);
@@ -97,10 +98,11 @@ export function createWorkspaceLayout(storage,window){
    finishDrag();current=null;
    const shell=root.querySelector('.shell');if(!shell)return;
    const document=root.ownerDocument,navigation=shell.querySelector('#workspace-navigation'),main=shell.querySelector('#workspace-main');
-   const panel=main.querySelector('#execution-panel'),slot=document.createElement('div');slot.className='execution-slot';
+   const candidates=[...main.querySelectorAll('#execution-panel,#collaboration-panel')],panel=candidates.find(el=>!el.closest('[hidden]')),slot=document.createElement('div');
+   for(const other of candidates)if(other!==panel&&other.id==='collaboration-panel')other.hidden=true;slot.className='execution-slot';
    if(panel)panel.replaceWith(slot);
-   const side=document.createElement('aside');side.id='task-progress';side.className='task-progress';side.setAttribute('aria-label','任务进度');
-   const heading=document.createElement('h2');heading.textContent='任务进度';side.append(heading);
+   const side=document.createElement('aside');side.id='task-progress';side.className='task-progress';side.setAttribute('aria-label',panel?.id==='execution-panel'?'任务进度':'协同面板');
+   const heading=document.createElement('h2');heading.textContent=panel?.id==='execution-panel'?'任务进度':'当前项目';side.append(heading);
    const left=separator(document,'navigation','导航宽度','workspace-navigation'),right=separator(document,'task','任务进度宽度','task-progress');
    navigation.after(left);main.after(right,side);
    const toggle=control(document,'toggle_navigation','收起导航','‹');toggle.className='navigation-toggle';navigation.prepend(toggle);

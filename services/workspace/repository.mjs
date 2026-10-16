@@ -68,7 +68,7 @@ export class WorkspaceRepository {
   #limits=null;
   #search;
   #memory;
-  constructor({ dataDir, fault = null, executionLimits }) {
+  constructor({ dataDir, fault = null, executionLimits, modelTransport }) {
     if (!dataDir) throw new TypeError('An isolated dataDir is required');
     const dir = resolve(dataDir);this.#dataDir=dir;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -87,7 +87,7 @@ export class WorkspaceRepository {
     this.#chatStore=new ChatStore(this.#db);
     this.#chatStore.interrupt();
     this.#modelVault=new ModelVault(this.#db,dir);
-    this.#modelService=new ModelService(this,this.#db);
+    this.#modelService=new ModelService(this,this.#db,{transport:modelTransport});
     this.#relayStore=new ModelRelayStore(this.#db,dir);this.#relayStore.interrupt();
     this.fault = fault;
     const priceFile=join(dir,'prices.json');
@@ -197,6 +197,7 @@ export class WorkspaceRepository {
       if(state.stateRevision!==background.stateRevision||state.permissionRevision!==background.permissionRevision)fail('stale_context','参考资料已经变化，本次还没有发送给模型。','查看最新资料后重新准备。');
     }});
   }
+  configureBuiltinOwner(ownerId){this.#modelVault.configureBuiltinOwner(ownerId);}
   models(auth,scope){
     this.#currentAuth(auth,scope,'review_memory');
     if(auth.kind!=='ui')denied();
@@ -1223,7 +1224,7 @@ export class WorkspaceRepository {
     const t=this.#currentAuth(auth,scope,'read_memory'),job=this.#get(t.partition,'execution_job',id);
     if (!job) denied();
     const attempt=this.#get(t.partition,'attempt',job.attemptId);
-    return {operation:this.operation(auth,scope,id),run:this.#get(t.partition,'run',job.runId),attempt,
+    return {archiveOrigin:job.archiveOrigin??null,operation:this.operation(auth,scope,id),run:this.#get(t.partition,'run',job.runId),attempt,
       results:attempt.resultRevisionIds.map(r=>this.#get(t.partition,'result',r)),cancelRequested:job.cancelRequested,
       goal:this.#get(t.partition,'context',job.packetId)?.goal??'已保存的工作',
       activity:this.#db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='execution_activity' AND json_extract(body_json,'$.operationId')=? ORDER BY rowid DESC LIMIT 100").all(t.partition,id).reverse().map(r=>JSON.parse(r.body_json)),

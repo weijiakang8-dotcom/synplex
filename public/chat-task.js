@@ -18,21 +18,28 @@ function messageMarkup(items,esc){
 }
 function composer(state,choices,esc){
   const selected=choices.findIndex(m=>m.connectionId===state.selection?.connectionId&&m.id===state.selection?.model),choice=choices[selected];
-  return `<form id="chat-form" data-ai-context="chat-composer"><label class="sr-only" for="chat-content">消息</label><textarea id="chat-content" name="content" maxlength="16000" rows="3" placeholder="说说你想了解或完成什么…" required>${esc(state.content||'')}</textarea><div class="chat-controls"><label>模型<select name="choice" required><option value="">选择模型</option>${choices.map((m,i)=>`<option value="${i}" ${i===selected?'selected':''}>${esc(m.connectionName)} · ${esc(m.name)}</option>`).join('')}</select></label>${choice?.capabilities.efforts.length?`<label>思考<select name="effort"><option value="">默认</option>${choice.capabilities.efforts.map(e=>`<option value="${esc(e)}" ${state.selection?.effort===e?'selected':''}>${esc(effortLabel(e))}</option>`).join('')}</select></label>`:''}<button type="button" data-open-model-settings data-tip="添加或管理自己的模型连接">模型设置</button><button class="primary" type="submit" ${!choices.length||state.sending?'disabled':''}>发送</button></div><p role="alert" aria-live="polite"></p><small class="subtle">Enter 发送，Shift + Enter 换行。对话不会执行外部操作。</small>${!choices.length?'<p class="notice">还没有可用的模型。请先打开“模型设置”，添加自己的连接；管理员也可以设置内置模型。</p>':''}</form>`;
+  return `<form id="chat-form" data-ai-context="chat-composer"><label class="sr-only" for="chat-content">消息</label><textarea id="chat-content" name="content" maxlength="16000" rows="3" placeholder="说说你想了解或完成什么…" required>${esc(state.content||'')}</textarea><div class="chat-controls"><label>模型<select name="choice" required><option value="">选择模型</option>${choices.map((m,i)=>`<option value="${i}" ${i===selected?'selected':''}>${esc(m.connectionName)} · ${esc(m.name)}</option>`).join('')}</select></label>${choice?`<label>思考<select name="effort"><option value="">默认</option>${choice.capabilities.efforts.map(e=>`<option value="${esc(e)}" ${state.selection?.effort===e?'selected':''}>${esc(effortLabel(e))}</option>`).join('')}</select></label>`:''}<button type="button" data-open-model-settings data-tip="添加或管理自己的模型连接">模型设置</button><button class="primary" type="submit" ${!choices.length||state.sending?'disabled':''}>发送</button></div><p role="alert" aria-live="polite"></p><small class="subtle">Enter 发送，Shift + Enter 换行。对话不会执行外部操作。</small>${!choices.length?'<p class="notice">还没有可用的模型。请先打开“模型设置”，添加自己的连接；管理员也可以设置内置模型。</p>':''}</form>`;
 }
 export function createChatTask({app,request,getScope,getCapabilities,render,storage,esc,onUseConversation}){
-  const states=new Map();let generation=0,timer=null;
+  const states=new Map();let generation=0,timer=null,mountedScope=null;
   const key=()=>storageKey(getScope());
-  function state(){const k=key();if(!states.has(k))states.set(k,{mode:'execute',content:'',conversationId:null,selection:null,...read(storage,k),items:[],conversations:[],choices:[],cursor:null});return states.get(k);}
-  function persistFor(s,scope){save(storage,storageKey(scope),{mode:s.mode,content:s.content,conversationId:s.conversationId,selection:s.selection,pending:s.pending,createId:s.createId});}
+  function state(scope=getScope()){const k=storageKey(scope);if(!states.has(k))states.set(k,{mode:'chat',content:'',conversationId:null,selection:null,...read(storage,k),items:[],conversations:[],choices:[],cursor:null});return states.get(k);}
+  function persistFor(s,scope){save(storage,storageKey(scope),{mode:s.mode,content:s.content,conversationId:s.conversationId,selection:s.selection,pending:s.pending,createId:s.createId,drafts:s.drafts,opened:s.opened});}
   function persist(){persistFor(state(),getScope());}
+  function rememberDraft(s){s.drafts??={};s.drafts[s.conversationId||'new']={content:s.content,selection:s.selection};}
+  async function switchConversation(id){
+    formState();const s=state();if(s.sending||s.pending)throw Error('请先核对当前消息，再切换对话。');
+    rememberDraft(s);s.opened=[...new Set([...(s.opened||[]),s.conversationId].filter(Boolean))];s.conversationId=id||null;const saved=s.drafts[s.conversationId||'new'];
+    s.content=saved?.content||'';s.selection=saved?.selection??s.selection;s.items=[];s.cursor=null;
+    s.opened=[...new Set([...(s.opened||[]),s.conversationId].filter(Boolean))];persist();stopPolling();await hydrate(generation);renderMessages();
+  }
   function stopPolling(){generation++;clearTimeout(timer);timer=null;}
   function formState(){
     const form=app.querySelector('#chat-form');if(!form||app.querySelector('#task-chat-panel')?.hidden)return;
-    const s=state(),choice=s.choices[Number(form.elements.choice.value)];s.content=form.elements.content.value;
-    if(form.elements.choice.options.length<2){persist();return;}
+    if(!mountedScope)return;const s=state(mountedScope),choice=s.choices[Number(form.elements.choice.value)];s.content=form.elements.content.value;
+    if(form.elements.choice.options.length<2){persistFor(s,mountedScope);return;}
     if(form.elements.choice.value!==''&&choice)s.selection={connectionId:choice.connectionId,model:choice.id,effort:form.elements.effort?.value||null};else s.selection=null;
-    persist();
+    persistFor(s,mountedScope);
   }
   function renderMessages(){
     const root=app.querySelector('#chat-messages');if(!root)return;const s=state(),open=new Set([...root.querySelectorAll('[data-chat-request] .chat-background[open]')].map(el=>el.closest('[data-chat-request]').dataset.chatRequest));
@@ -58,15 +65,19 @@ export function createChatTask({app,request,getScope,getCapabilities,render,stor
   function renderConversations(){
     const s=state(),select=app.querySelector('#chat-conversation');if(!select)return;
     select.innerHTML='<option value="">新对话</option>'+s.conversations.map(c=>`<option value="${esc(c.id)}" ${s.conversationId===c.id?'selected':''}>${esc(c.title)}</option>`).join('');
+    const tabs=app.querySelector('#chat-tabs');if(tabs){
+      const opened=new Set([...(s.opened||[]),s.conversationId].filter(Boolean));
+      tabs.innerHTML=s.conversations.filter(c=>opened.has(c.id)).map(c=>`<button type="button" role="tab" data-chat-tab="${esc(c.id)}" aria-selected="${s.conversationId===c.id}" data-ai-action="switch_conversation" data-ai-id="conversation:${esc(c.id)}" title="${esc(c.title)}">${esc(Array.from(c.title).slice(0,28).join(''))}</button>`).join('');
+    }
     const more=app.querySelector('[data-chat-action=more-conversations]');if(more)more.hidden=!s.listCursor;
   }
   async function hydrate(token){
     const scope=structuredClone(getScope()),s=state();
     try{
       const [models,chats]=await Promise.all([request('ui_models',{scope}),request('ui_chat_list',{scope,cursor:null})]);if(token!==generation)return;
-      s.choices=modelChoices(models.connections);s.conversations=chats.items;s.listCursor=chats.cursor;
+      s.choices=modelChoices(models.connections);if(!s.selection&&s.choices.length){const first=s.choices[0];s.selection={connectionId:first.connectionId,model:first.id,effort:null};persist();}s.conversations=chats.items;s.listCursor=chats.cursor;
       renderConversations();
-      app.querySelector('#chat-composer').innerHTML=composer(s,s.choices,esc);await reload(token);
+      app.querySelector('#chat-composer').innerHTML=composer(s,s.choices,esc);await reload(token);if(token===generation)renderMessages();
       if(s.pending)app.querySelector('#chat-form [role=alert]').innerHTML='上一条消息需要核对。<button type="button" data-chat-action="lookup" data-ai-action="chat_lookup">查看原消息</button>';
     }catch(error){if(token===generation)showError(error);}
   }
@@ -78,7 +89,7 @@ export function createChatTask({app,request,getScope,getCapabilities,render,stor
       if(!s.conversationId){const createId=s.createId||crypto.randomUUID();s.createId=createId;persistFor(s,scope);const created=await request('ui_chat_create',{scope,requestId:createId});s.conversationId=created.id;s.createId=null;persistFor(s,scope);}
       const pending={conversationId:s.conversationId,requestId:crypto.randomUUID(),content,selection,excludedClaimIds:[]};s.pending=pending;persistFor(s,scope);
       try{await request('ui_chat_send',{scope,...pending});}catch(error){if(error.status>=400&&error.status<500){s.pending=null;persistFor(s,scope);}throw error;}
-      s.pending=null;if(s.content===pending.content)s.content='';persistFor(s,scope);
+      s.pending=null;if(s.content===pending.content)s.content='';if(s.drafts?.new?.content===pending.content)s.drafts.new.content='';rememberDraft(s);persistFor(s,scope);
       if(JSON.stringify(scope)!==JSON.stringify(getScope()))return;
       form.elements.content.value=s.content;stopPolling();await hydrate(generation);
     }finally{s.sending=false;}
@@ -95,7 +106,7 @@ export function createChatTask({app,request,getScope,getCapabilities,render,stor
   async function action(button){
     const s=state(),scope=structuredClone(getScope()),token=generation,id=button.closest('[data-chat-request]')?.dataset.chatRequest;
     if(button.dataset.chatAction==='use')return useConversation(s);
-    if(button.dataset.chatAction==='new'){if(s.pending)throw Error('请先核对上一条消息，再新建对话。');formState();s.conversationId=null;s.items=[];persist();stopPolling();await hydrate(generation);renderMessages();return;}
+    if(button.dataset.chatAction==='new')return switchConversation(null);
     if(['more-conversations','earlier'].includes(button.dataset.chatAction))return earlier(button.dataset.chatAction,s,scope,token);
     if(button.dataset.chatAction==='lookup'){
       if(!s.pending)return;const value=await request('ui_chat_lookup',{scope,conversationId:s.pending.conversationId,requestId:s.pending.requestId});if(token!==generation)return;
@@ -109,6 +120,7 @@ export function createChatTask({app,request,getScope,getCapabilities,render,stor
   }
   app.addEventListener('click',event=>{
     if(event.target.closest('[data-action=logout]')){stopPolling();for(const k of [...states.keys()])storage.removeItem(k);states.clear();return;}
+    const tab=event.target.closest('[data-chat-tab]');if(tab){event.preventDefault();event.stopImmediatePropagation();switchConversation(tab.dataset.chatTab).catch(showError);return;}
     const mode=event.target.closest('[data-task-mode]'),button=event.target.closest('[data-chat-action]');if(!mode&&!button)return;
     event.preventDefault();event.stopImmediatePropagation();formState();
     if(mode){state().mode=mode.dataset.taskMode;persist();render();return;}
@@ -117,21 +129,23 @@ export function createChatTask({app,request,getScope,getCapabilities,render,stor
   app.addEventListener('input',event=>{if(event.target.closest('#chat-form'))formState();});
   app.addEventListener('change',event=>{
     if(event.target.closest('#chat-form')){formState();if(event.target.name==='choice')app.querySelector('#chat-composer').innerHTML=composer(state(),state().choices,esc);}
-    if(event.target.id==='chat-conversation'){formState();state().conversationId=event.target.value||null;state().items=[];persist();stopPolling();reload(generation).catch(showError);renderMessages();}
+    if(event.target.id==='chat-conversation')switchConversation(event.target.value).catch(showError);
   });
-  app.addEventListener('keydown',event=>{if(event.target.id!=='chat-content'||event.key!=='Enter'||event.shiftKey)return;event.preventDefault();event.stopImmediatePropagation();event.target.form.requestSubmit();});
+  app.addEventListener('keydown',event=>{if(event.target.id!=='chat-content'||event.key!=='Enter'||event.shiftKey||event.isComposing||event.keyCode===229)return;event.preventDefault();event.stopImmediatePropagation();event.target.form.requestSubmit();});
   app.addEventListener('submit',event=>{
     if(event.target.id!=='chat-form')return;event.preventDefault();event.stopImmediatePropagation();const form=event.target,button=form.querySelector('[type=submit]');if(button.disabled)return;button.disabled=true;send(form).catch(showError).finally(()=>{button.disabled=false;});
   });
   return {
+    capture:formState,
+    selectMode(mode){if(!['chat','execute'].includes(mode))return;formState();state().mode=mode;persist();},
     refreshModels(){if(app.querySelector('#task-chat-panel')&&state().mode==='chat'){formState();stopPolling();return hydrate(generation);}},
     wrapTask(html,view){
       if(view!=='task'||!getCapabilities().chat)return html;
-      const s=state();return `<div class="task-mode" role="group" aria-label="任务方式"><button type="button" data-task-mode="chat" data-ai-action="open_chat" aria-pressed="${s.mode==='chat'}">对话</button><button type="button" data-task-mode="execute" data-ai-action="open_execution" aria-pressed="${s.mode==='execute'}">执行任务</button></div><section id="task-chat-panel" ${s.mode==='chat'?'':'hidden'} data-ai-context="chat"><div class="chat-toolbar"><label>对话<select id="chat-conversation"><option value="">新对话</option></select></label><button type="button" data-chat-action="more-conversations" data-ai-action="chat_more_conversations" hidden>更早的对话</button><button type="button" data-chat-action="new" data-ai-action="chat_new">新对话</button><button type="button" data-chat-action="use" data-ai-action="chat_to_task" data-tip="把当前对话作为参考，再写下要做的任务">带入执行</button></div><button type="button" data-chat-action="earlier" data-ai-action="chat_earlier" hidden>更早的消息</button><div id="chat-messages" aria-live="polite"></div><div id="chat-composer">${composer(s,[],esc)}</div></section><section id="task-execute-panel" ${s.mode==='execute'?'':'hidden'}>${html}</section>`;
+      const s=state();return `<div class="task-mode" role="group" aria-label="任务方式"><button type="button" data-task-mode="chat" data-ai-action="open_chat" aria-pressed="${s.mode==='chat'}">对话</button><button type="button" data-task-mode="execute" data-ai-action="open_execution" aria-pressed="${s.mode==='execute'}">执行任务</button></div><section id="task-chat-panel" ${s.mode==='chat'?'':'hidden'} data-ai-context="chat"><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="已打开的对话"></div><div class="chat-toolbar"><label>对话<select id="chat-conversation"><option value="">新对话</option></select></label><button type="button" data-chat-action="more-conversations" data-ai-action="chat_more_conversations" hidden>更早的对话</button><button type="button" data-chat-action="new" data-ai-action="chat_new">新对话</button><button type="button" data-chat-action="use" data-ai-action="chat_to_task" data-tip="把当前对话作为参考，再写下要做的任务">带入执行</button></div><button type="button" data-chat-action="earlier" data-ai-action="chat_earlier" hidden>更早的消息</button><div id="chat-messages" aria-live="polite"></div><div id="chat-composer">${composer(s,[],esc)}</div></section><section id="task-execute-panel" ${s.mode==='execute'?'':'hidden'}>${html}</section>`;
     },
     attach(){
-      const panel=app.querySelector('#task-chat-panel');if(!panel){stopPolling();return;}
-      stopPolling();
+      const panel=app.querySelector('#task-chat-panel');if(!panel){mountedScope=null;stopPolling();return;}
+      mountedScope=structuredClone(getScope());stopPolling();
       if(state().mode==='chat')hydrate(generation);
     },
   };

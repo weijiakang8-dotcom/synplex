@@ -6,8 +6,8 @@ import {createWorkspacePages,PAGE_NAMES} from '../../public/workspace-pages.js';
 test('页面状态只允许既有页面、逐项目隔离；固定/关闭/重开/刷新和损坏存储不新建任务',()=>{
  const entries=new Map(),storage={getItem:k=>entries.get(k),setItem:(k,v)=>entries.set(k,v),removeItem:k=>entries.delete(k)};
  const a={projectId:'a',versionId:null,branchId:null},b={...a,projectId:'b'},pages=createWorkspacePages(storage);
- assert.equal(pages.current(a),'progress');pages.open(a,'materials');pages.open(a,'task');pages.open(a,'materials');
- assert.equal(pages.current(b),'progress');
+ assert.equal(pages.current(a),'task');pages.open(a,'materials');pages.open(a,'task');pages.open(a,'materials');
+ assert.equal(pages.current(b),'task');
  pages.act(a,'pin-page','materials');pages.act(a,'close-page','materials');assert.equal(pages.current(a),'materials');
  pages.act(a,'close-other-pages','materials');const html=pages.markup(a,x=>x);
  assert.ok(!html.includes('page-tab-task'));assert.match(html,/page-tab-progress/);assert.match(html,/page-tab-materials/);
@@ -17,7 +17,7 @@ test('页面状态只允许既有页面、逐项目隔离；固定/关闭/重开
  assert.equal(pages.open(a,'__proto__'),'progress');assert.equal(pages.open(a,'assistant'),'progress');assert.equal(Object.keys(PAGE_NAMES).length,8);
  pages.clear();assert.equal(entries.size,0);
  const damaged=createWorkspacePages({getItem:()=>'{',setItem:()=>{throw Error('full');},removeItem(){}});
- assert.equal(damaged.current(a),'progress');assert.equal(damaged.open(a,'task'),'task');assert.equal(damaged.current(a),'task');
+ assert.equal(damaged.current(a),'task');assert.equal(damaged.open(a,'task'),'task');assert.equal(damaged.current(a),'task');
  const corrupt=createWorkspacePages({getItem:()=>JSON.stringify({items:[null,{id:'results'},{id:'results'},{id:'unknown'}],active:'absent'}),setItem(){},removeItem(){}});
  assert.equal(corrupt.current(a),'results');assert.equal((corrupt.markup(a,x=>x).match(/role="tab"/g)||[]).length,1);
 });

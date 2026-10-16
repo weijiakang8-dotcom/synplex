@@ -1,3 +1,4 @@
+import {discoveredModels} from './model-profiles.js';
 import {errorText} from './user-copy.js';
 export function bindModelCatalog({form,api,esc,onChanged,connection=null}){
  let catalog=[],capacities={},generation=0;
@@ -29,5 +30,5 @@ export function bindModelCatalog({form,api,esc,onChanged,connection=null}){
   finally{if(token===generation)button.disabled=false;}
  };
  for(const name of ['endpoint','secret','protocol'])form.elements[name].addEventListener('input',()=>{generation++;catalog=[];capacities={};button.disabled=false;status.textContent='连接信息已变化，请重新获取型号。';});
- return {apply};
+ return {apply,models:()=>discoveredModels({models:catalog,capacities},form.elements.endpoint.value)};
 }

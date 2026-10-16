@@ -30,6 +30,7 @@ export function requiredDataFeatures(database){
    try{lstatSync(join(dirname(database),name));features.push('idle-product-handoff/1');}
    catch(error){if(error.code!=='ENOENT')throw error;}
   }
+  if(db.prepare("SELECT 1 FROM records WHERE kind='execution_job' AND json_type(body_json,'$.archiveOrigin') IS NOT NULL LIMIT 1").get())features.push('completed-history/1');
   if(db.prepare("SELECT 1 FROM records WHERE kind='context' AND json_type(body_json,'$.chatReference') IS NOT NULL LIMIT 1").get())features.push('chat-task-reference/1');
   if(db.prepare("SELECT 1 FROM records WHERE kind='execution_question' AND json_type(body_json,'$.prompt.approval') IS NOT NULL LIMIT 1").get())features.push('operation-approval/1');
   if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_connections'").get()&&db.prepare("SELECT 1 FROM model_connections WHERE EXISTS (SELECT 1 FROM json_each(config_json,'$.models') WHERE json_type(value,'$.pricing')='object') LIMIT 1").get())features.push('model-price-snapshots/1');

@@ -164,6 +164,7 @@ export class ExecutionCoordinator {
   }
   async reconcile(auth,scope,id){
     const state=this.repository.executionState(auth,scope,id);
+    if(state.archiveOrigin)return state; // Imported history never contacts the original engine.
     if(auth.kind!=='ui'||!auth.capabilities.has('execute'))throw new ProtocolError('scope_denied','无权核对执行。','使用原项目的执行入口。');
     const job=this.repository.read(auth,scope,'execution_job',id),adapter=this.#adapters.get(job.executorOwner);
     await this.#reconcileInputDeliveries(auth,scope,id,state,job,adapter);

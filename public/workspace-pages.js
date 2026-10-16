@@ -9,7 +9,7 @@ function clearStored(storage,prefix,known){
  try{for(let i=0;i<storage.length;i++){const k=storage.key(i);if(k?.startsWith(prefix))keys.add(k);}}catch{}
  for(const k of keys){try{storage.removeItem(k);}catch{}}
 }
-const initial=()=>({active:'progress',items:[{id:'progress',pinned:true}]});
+const initial=()=>({active:'task',items:[{id:'task',pinned:false},{id:'progress',pinned:true}]});
 function validated(value){
  if(!value||!Array.isArray(value.items))return initial();
  const seen=new Set(),items=[];

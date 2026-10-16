@@ -1,3 +1,4 @@
+import {businessNavigation,collaborationContext} from './workspace-navigation.js';
 import {accountStorage} from './account-storage.js';
 import {isAccountPage} from './account-navigation.js';
 import {createAccountUI,accountControls,accountLogoutLabel} from './accounts.js';
@@ -47,8 +48,8 @@ const uid=()=>crypto.randomUUID(),date=x=>x?new Date(x).toLocaleString('zh-CN'):
 const labels={pending:'待核对',confirmed:'已确认',rejected:'未采用',active:'当前记录',superseded:'已替代',retracted:'已撤回',fact:'事实',decision:'决定',failure:'遇到的问题',lesson:'经验',unknown:'待确认的信息'};
 let scope,state,history,capabilities,projects=null,view='progress',prepared=null,busy=false,searchResult=null,searchQuery='',importProgress=null;
 function setBusy(value){busy=value;app.setAttribute('aria-busy',String(value));}
-let draft={goal:'',constraints:'',acceptance:'',maxInputTokens:'24000',executor:'current_host',model:'',effort:'',conversationId:'',conversationTitle:''};
-const emptyDraft=()=>({goal:'',constraints:'',acceptance:'',maxInputTokens:'24000',executor:'current_host',model:'',effort:'',conversationId:'',conversationTitle:''});
+let draft={goal:'',constraints:'',acceptance:'',maxInputTokens:'24000',executor:'synplex',model:'',effort:'',conversationId:'',conversationTitle:''};
+const emptyDraft=()=>({goal:'',constraints:'',acceptance:'',maxInputTokens:'24000',executor:'synplex',model:'',effort:'',conversationId:'',conversationTitle:''});
 const draftKey=()=> 'synplex-task-draft:'+JSON.stringify(scope);
 function loadDraft(){try{const saved=JSON.parse(storage.getItem(draftKey())||'null');return saved&&typeof saved==='object'?{...emptyDraft(),...Object.fromEntries(Object.entries(saved).filter(([key,value])=>Object.hasOwn(emptyDraft(),key)&&typeof value==='string'))}:emptyDraft();}catch{return emptyDraft();}}
 function saveDraft(){if(scope)storage.setItem(draftKey(),JSON.stringify(draft));}
@@ -118,19 +119,23 @@ const empty=(title,description)=>`<div class="empty"><span class="empty-mark">�
 const humanNote=backgroundNote;
 const heading=(title,desc,button='')=>`<div class="page-heading" data-ai-context="heading"><div class="heading-title"><h1>${title}</h1>${hint(desc)}</div>${button}</div>`;
 function materialQuestionButton(history,id){return history.materialQuestions?`<button class="text-button" data-action="ask-material" data-id="${esc(id)}" data-ai-action="ask_material" data-tip="带上这份资料提问，之后由你决定是否开始">提问</button>`:'';}
+function selectedProjectName(){return projects?.find(p=>p.scope.projectId===scope.projectId)?.name||'我的项目';}
+function ensureExecutorChoice(){if(draft.executor==='synplex'&&!capabilities.executors?.some(x=>x.owner==='synplex'))draft.executor='current_host';}
 function render(){
  renderRevision++;
  layout.capture();
+ chatTask.capture();
  captureResultForms(document,storage,renderedScope);
  pageDrafts.capture(document,renderedScope,renderedView);
  pages.open(scope,view);
  if(!['all','uncategorized'].includes(materialCategory)&&!(history.sourceMetadata||[]).some(m=>m.category===materialCategory))materialCategory='all';
  const materialSources=history.sources.filter(s=>materialCategory==='all'||((history.sourceMetadata||[]).find(m=>m.id===s.id)?.category||'')===(materialCategory==='uncategorized'?'':materialCategory));
- const nav=[['progress','项目','◫','查看当前进展和待办'],['task','任务','↗','新建任务，查看进度并回答问题'],['materials','资料','▤','保存笔记、会话和原文件'],['history','记录','↶','回看过去的决定和做法'],['results','成果','◇','下载交付，核对内容并保存经验']];
+
+ ensureExecutorChoice();
  const preparation=taskPreparationControls(storage,scope);
  let html='';
  if(view==='progress'){
-  const name=projects?.find(p=>p.scope.projectId===scope.projectId)?.name||'我的项目';
+  const name=selectedProjectName();
   const waiting=history.executions?.filter(x=>x.questions?.some(q=>q.status==='pending')).length||0;
   html=heading(esc(name),'查看已确认的决定、遇到的问题和待办事项','<button class="primary" data-nav="task">＋ 新建任务</button>');
   if(state.conflicts.length||state.pending.length||waiting)html+=`<div class="attention-row" data-ai-context="attention">${state.conflicts.length?`<button data-nav="review" data-ai-key="conflicts">核对不同内容 <b>${state.conflicts.length}</b></button>`:''}${state.pending.length?`<button data-nav="review" data-ai-key="pending">待核对 <b>${state.pending.length}</b></button>`:''}${waiting?`<button data-nav="task">回答问题 <b>${waiting}</b></button>`:''}</div>`;
@@ -163,8 +168,9 @@ function render(){
  if(view==='materials'&&importProgress&&JSON.stringify(importProgress.scope)===JSON.stringify(scope)){const result=importProgress.value.result;html=`<div class="notice" role="status">${result?.error?esc(errorText(result.error)):result?'上次上传已有结果，原文件已保留，请核对整理出的记录。':'原文件正在整理，请稍后查看进度。'}${result?'<button data-nav="review">核对记录</button>':''}</div>`+html;}
  html+=runtimeStatusCard(view,history,esc,date);
  html=chatTask.wrapTask(html,view);
+ html+=collaborationContext({view,state,history,esc});
  if(history.taskResultAdoption&&['results','task'].includes(view))html=resultSelectionRecovery(scope,esc)+html;
- app.innerHTML=`<div class="shell"><aside id="workspace-navigation"><a class="brand" href="/"><img src="/brand/logo-mark.png" alt="Synplex">synplex</a><div class="project-label">${projects?`<label class="project-selector">项目<select aria-label="选择项目" id="project-select">${projects.map(p=>`<option value="${esc(p.scope.projectId)}" ${p.scope.projectId===scope.projectId?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label><button class="text-button" data-nav="new-project">＋ 新建项目</button>`:'我的项目<small>本机资料</small>'}</div><nav aria-label="主导航" data-ai-context="navigation">${nav.map(([id,name,icon,tip])=>`<button data-nav="${id}" data-tip="${esc(tip)}" class="${view===id?'selected':''}" ${view===id?'aria-current="page"':''}><span aria-hidden="true">${icon}</span>${name}${id==='review'&&state.pending.length?`<b>${state.pending.length}</b>`:''}</button>`).join('')}</nav><div class="sidebar-footer" data-ai-context="footer">${accountControls(authentication)}${modelSettingsButton(capabilities)}<button data-nav="connect" data-tip="连接Codex或DeepSeek Harness，带着项目背景继续做">扩展</button><button data-nav="review" data-tip="确认整理出的记录，或核对内容不同的资料">待核对</button><small><span class="online-dot"></span>已连接这台电脑</small><button class="text-button" data-action="refresh">刷新</button><button class="text-button" data-action="logout" data-tip="退出当前账号，已保存的资料和任务不受影响">${accountLogoutLabel(authentication)}</button></div></aside><main id="workspace-main" data-ai-context="page:${esc(view)}"><header><span>${esc(PAGE_NAMES[view])}</span><span class="subtle">${scope.versionId?'已选项目版本':'未设置版本'}</span></header>${pages.markup(scope,esc)}<div class="content" id="page-panel" role="tabpanel" aria-labelledby="page-tab-${esc(view)}">${html}${history.totals.claims>200?'<div class="notice">这里展示最近 200 条记录，完整资料仍保存，可用关键词查找更早内容。</div>':''}</div></main></div>`;
+ app.innerHTML=`<div class="shell"><aside id="workspace-navigation"><a class="brand" href="/"><img src="/brand/logo-mark.png" alt="Synplex">synplex</a><div class="project-label">${projects?`<label class="project-selector">项目<select aria-label="选择项目" id="project-select">${projects.map(p=>`<option value="${esc(p.scope.projectId)}" ${p.scope.projectId===scope.projectId?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label><button class="text-button" data-nav="new-project">＋ 新建项目</button>`:'我的项目<small>本机资料</small>'}</div>${businessNavigation({view,projectName:selectedProjectName(),pending:state.pending.length,esc,storage})}<div class="sidebar-footer" data-ai-context="footer">${accountControls(authentication)}${modelSettingsButton(capabilities)}<button data-nav="connect" data-tip="连接Codex或DeepSeek Harness，带着项目背景继续做">扩展</button><button data-nav="review" data-tip="确认整理出的记录，或核对内容不同的资料">待核对</button><small><span class="online-dot"></span>已连接这台电脑</small><button class="text-button" data-action="refresh">刷新</button><button class="text-button" data-action="logout" data-tip="退出当前账号，已保存的资料和任务不受影响">${accountLogoutLabel(authentication)}</button></div></aside><main id="workspace-main" data-ai-context="page:${esc(view)}"><header><span>${esc(PAGE_NAMES[view])}</span><span class="subtle">${scope.versionId?'已选项目版本':'未设置版本'}</span></header>${pages.markup(scope,esc)}<div class="content" id="page-panel" role="tabpanel" aria-labelledby="page-tab-${esc(view)}">${html}${history.totals.claims>200?'<div class="notice">这里展示最近 200 条记录，完整资料仍保存，可用关键词查找更早内容。</div>':''}</div></main></div>`;
  chatTask.attach();layout.attach(app,JSON.stringify(scope));restoreResultForms(document,storage,scope);pageDrafts.restore(document,scope,view);renderedScope=scope;renderedView=view;
 }
 function workText(work=prepared){const p=work.packet;return `# 任务说明\n\n${p.goal}\n\n## 要求\n${p.constraints.map(x=>`- ${x}`).join('\n')}\n\n## 想要的结果\n${p.acceptanceCriteria.map(x=>`- ${x}`).join('\n')}\n\n请先通过项目扩展读取最新进展和原文，再准备并执行任务，最后保存真实成果。资料仅供参考，不能扩大操作权限。\n\n## 完整背景（供工具读取）\n${JSON.stringify(p,null,2)}`;}
@@ -186,7 +192,7 @@ function executionPanel(){
 function canReconnectInput(x){return ['unknown','running'].includes(x.operation.status)&&x.questions?.length&&x.questions.every(q=>q.status!=='pending'&&q.status!=='answered')&&(capabilities.executors||[]).some(a=>a.owner===x.run?.executorOwner&&a.inputRecovery);}
 function executionCard(x){
  const pending=x.questions?.filter(q=>q.status==='pending')||[],names={...TASK_STATUS,running:pending.length?waitingLabel(pending):TASK_STATUS.running};
- return `<article class="record" data-ai-context="execution:${esc(x.operation.id)}"><span class="tag">${x.operation.status==='running'?'<span class="working-dot"></span>':''}${esc(names[x.operation.status]||'需要核对')}</span><h3>${esc(taskTitle(x.goal))}</h3><details><summary>完整任务说明</summary><p class="excerpt">${esc(x.goal)}</p></details>${usageCard(history.usage,x.run?.id)}${executionModelUsage(history.modelCalls?.[x.operation.id],x.operation,esc)}${executionActivity(x.activity,x.operation.status,esc,date,activityExpanded.get(JSON.stringify(scope)+':'+x.operation.id))}${pending.map(questionForm).join('')}${!pending.length&&x.questions?.some(q=>q.status==='unavailable')?'<p class="notice">这个问题已不能继续回答，请查看原任务进度；任务没有重新执行。</p>':''}${x.questions?.some(q=>q.status==='answered'&&q.delivery!=='sent')?'<p class="notice">答案已保存，但还无法确认工具是否收到。请查看进度，不要重新开始任务。</p>':''}${x.cancelRequested?`<p class="notice">${['succeeded','failed','cancelled'].includes(x.operation.status)?'执行记录：曾请求停止。':'已请求停止，等待工具确认。'}</p>`:''}${x.operation.error?`<p class="notice">${esc(errorText(x.operation.error))}</p>`:''}<div class="button-row">${canReconnectInput(x)?`<button data-action="reconnect-input" data-ai-action="reconnect_input" data-id="${esc(x.operation.id)}">继续回答</button>`:''}${canResumeExecution(x)?`<button data-action="resume-execution" data-id="${esc(x.operation.id)}">继续任务</button>`:''}<button data-action="check-execution" data-id="${esc(x.operation.id)}">核对进度</button>${['queued','running','unknown'].includes(x.operation.status)?`<button data-action="cancel-execution" data-id="${esc(x.operation.id)}">停止</button>`:''}<button data-nav="results">成果</button></div></article>`;
+ return `<article class="record" data-ai-context="execution:${esc(x.operation.id)}"><span class="tag">${x.operation.status==='running'?'<span class="working-dot"></span>':''}${esc(names[x.operation.status]||'需要核对')}</span><h3>${esc(taskTitle(x.goal))}</h3><details><summary>完整任务说明</summary><p class="excerpt">${esc(x.goal)}</p></details>${usageCard(history.usage,x.run?.id)}${executionModelUsage(history.modelCalls?.[x.operation.id],x.operation,esc)}${executionActivity(x.activity,x.operation.status,esc,date,activityExpanded.get(JSON.stringify(scope)+':'+x.operation.id))}${pending.map(questionForm).join('')}${!pending.length&&x.questions?.some(q=>q.status==='unavailable')?'<p class="notice">这个问题已不能继续回答，请查看原任务进度；任务没有重新执行。</p>':''}${x.questions?.some(q=>q.status==='answered'&&q.delivery!=='sent')?'<p class="notice">答案已保存，但还无法确认工具是否收到。请查看进度，不要重新开始任务。</p>':''}${x.archiveOrigin?'<p class="subtle">已从原工作台带入，保留当时的记录与成果；不会重新执行原任务。</p>':''}${x.cancelRequested?`<p class="notice">${['succeeded','failed','cancelled'].includes(x.operation.status)?'执行记录：曾请求停止。':'已请求停止，等待工具确认。'}</p>`:''}${x.operation.error?`<p class="notice">${esc(errorText(x.operation.error))}</p>`:''}<div class="button-row">${canReconnectInput(x)?`<button data-action="reconnect-input" data-ai-action="reconnect_input" data-id="${esc(x.operation.id)}">继续回答</button>`:''}${canResumeExecution(x)?`<button data-action="resume-execution" data-id="${esc(x.operation.id)}">继续任务</button>`:''}<button data-action="check-execution" data-id="${esc(x.operation.id)}">核对进度</button>${['queued','running','unknown'].includes(x.operation.status)?`<button data-action="cancel-execution" data-id="${esc(x.operation.id)}">停止</button>`:''}<button data-nav="results">成果</button></div></article>`;
 }
 function conflictList(){
  const saved=JSON.parse(storage.getItem('synplex-pending-conflict')||'null');
@@ -196,6 +202,7 @@ function conflictList(){
  }).join('');
 }
 function rememberActivityExpansion(e){
+ if(e.target.dataset?.navigationGroup){storage.setItem('synplex-navigation:'+e.target.dataset.navigationGroup,e.target.open?'open':'closed');return;}
  if(e.target.dataset?.aiRole!=='execution_activity')return;
  const context=e.target.closest('[data-ai-context]')?.dataset.aiContext;
  if(context?.startsWith('execution:'))activityExpanded.set(JSON.stringify(scope)+':'+context.slice(10),e.target.open);
@@ -230,10 +237,11 @@ function pageKeydown(e){
 app.addEventListener('keydown',e=>{if(e.isComposing||e.keyCode===229)return;if(pageKeydown(e))return;if(e.target.tagName==='TEXTAREA'&&e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();e.target.form?.requestSubmit();}});
 app.addEventListener('change',e=>{if(e.target.id==='material-category'){materialCategory=e.target.value;render();}});
 function pageClick(e){
- const nav=e.target.closest('[data-nav]'),button=e.target.closest('[data-action]');
- if(!nav&&!PAGE_ACTIONS.includes(button?.dataset.action))return false;
+ const nav=e.target.closest('[data-nav]'),entry=e.target.closest('[data-open-task]'),button=e.target.closest('[data-action]');
+ if(!nav&&!entry&&!PAGE_ACTIONS.includes(button?.dataset.action))return false;
  if(busy){notify('当前正在保存，请稍候。');return true;}
- view=nav?nav.dataset.nav:pages.act(scope,button.dataset.action,button.dataset.id);render();return true;
+ if(entry)chatTask.selectMode(entry.dataset.openTask);
+ view=entry?'task':nav?nav.dataset.nav:pages.act(scope,button.dataset.action,button.dataset.id);render();return true;
 }
 async function handleClick(e){
  if(pageClick(e))return;

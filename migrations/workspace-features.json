@@ -12,6 +12,7 @@
     "chat-task-reference/1",
     "model-price-snapshots/1",
     "tenant-accounts/1",
-    "account-recovery/1"
+    "account-recovery/1",
+    "completed-history/1"
   ]
 }

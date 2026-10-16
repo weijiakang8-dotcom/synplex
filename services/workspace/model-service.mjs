@@ -1,3 +1,4 @@
+import {discoveredModels} from '../../public/model-profiles.js';
 import {fetchModelCatalog} from './model-catalog.mjs';
 import {randomUUID} from 'node:crypto';
 import {exactObject,modelFailure} from './model-contract.mjs';
@@ -14,7 +15,13 @@ export class ModelService{
     exactObject(input,['protocolVersion','scope','requestId','id','revision','kind','config','secret','action','selection','consent','endpoint']);
     const vault=this.#repository.models(auth,input.scope);
     if(action==='list')return {connections:vault.list(),canManageBuiltin:admin};
-    if(action==='save')return {connection:vault.save(input,admin)};
+    if(action==='save'){
+      if(Array.isArray(input.config?.models)&&!input.config.models.length){
+        const catalog=await fetchModelCatalog(this.#transport,input.config&&{endpoint:input.config.endpoint,secret:input.secret});
+        input={...input,config:{...input.config,models:discoveredModels(catalog,input.config.endpoint)}};
+      }
+      return {connection:vault.save(input,admin)};
+    }
     if(action==='change')return vault.change(input,admin);
     if(action==='discover')return input.endpoint!==undefined?fetchModelCatalog(this.#transport,input):this.#discover(vault,input);
     if(action==='probe')return this.#probe(auth,vault,input);

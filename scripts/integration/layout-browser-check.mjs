@@ -27,7 +27,7 @@ export async function checkWorkspaceLayout(page,evidence){
  await page.locator('[data-layout-action=toggle_navigation]').click();assert.equal(await left.isVisible(),true);
  await page.locator('#task-progress').evaluate(element=>element.scrollTop=140);
  const progressTop=await page.locator('#task-progress').evaluate(element=>element.scrollTop);assert.ok(progressTop>0);
- await page.locator('nav [data-nav=materials]').click();assert.equal(await page.locator('#task-progress').isVisible(),false);
+ await page.locator('nav [data-nav=materials]').click();assert.equal(await page.locator('#collaboration-panel').isVisible(),true);
  await page.locator('[role=tab][data-id=task]').click();await question.waitFor();
  assert.ok(Math.abs(await page.locator('#task-progress').evaluate(element=>element.scrollTop)-progressTop)<2);
  assert.equal(await radio.isChecked(),true);

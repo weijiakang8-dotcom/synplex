@@ -39,6 +39,7 @@ for(const name of ['ingestion','context','experience']) {
   if(existsSync(moduleFile))modules[name]=await import(fileURLToPath(new URL(`../../packages/${name}/index.mjs`,import.meta.url)));
 }
 const rootAuth=repository.authenticate(readFileSync(connection.uiTokenFile,'utf8').trim());
+repository.configureBuiltinOwner(rootAuth.ownerId);
 const modelRelay=repository.modelRelay();
 const adapters=loadExecutors(dataDir,{relay:modelRelay,relayEndpoint:connection.endpoint+'/internal/model/v1'}),execution=new ExecutionCoordinator({repository,adapters});
 const localProjects=process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'?new LocalProjects({repository,dataDir,connection,rootAuth,allowExecution:!!execution.executors().length}):null;

@@ -29,7 +29,7 @@ function model(value){
 export function validateConnection(value){
   exactObject(value,['name','endpoint','protocol','models','maxOutputTokens']);
   if(!text(value.name,80)||!['chat-completions','responses'].includes(value.protocol))throw modelFailure('请填写名称并选择连接方式。');
-  if(!Array.isArray(value.models)||!value.models.length||value.models.length>100)throw modelFailure('请添加至少一个可用型号，最多100个。');
+  if(!Array.isArray(value.models)||!value.models.length||value.models.length>1000)throw modelFailure('请添加至少一个可用型号，最多1000个。');
   const models=value.models.map(model);
   if(new Set(models.map(m=>m.id)).size!==models.length)throw modelFailure('同一个型号请只添加一次。');
   if(!Number.isSafeInteger(value.maxOutputTokens)||value.maxOutputTokens<16||value.maxOutputTokens>32768)throw modelFailure('每次回复长度需在16至32768之间。');

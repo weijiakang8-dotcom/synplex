@@ -18,6 +18,7 @@ try{
   await page.goto(url);await page.locator('[data-open-model-settings]').click();await page.locator('#new-model-connection').click();
   const form=page.locator('#model-settings-form');
   await form.locator('[name=name]').fill('我的常用模型');await form.locator('[name=endpoint]').fill('https://api.example.com/v1');await form.locator('[name=secret]').fill('synthetic-browser-only-key');
+  await form.getByText('型号与能力（可选）',{exact:true}).click();await form.locator('#add-model-row').click();
   await form.locator('[name=model]').fill('fixture-model');await form.locator('[name=modelName]').fill('日常型号');
   await form.locator('button.primary').click();await page.locator('[data-model-id]').waitFor();
   assert.equal(repository.models(auth,scope).list().length,1);assert.equal(await page.locator('dialog').innerText().then(t=>t.includes('synthetic-browser-only-key')),false);

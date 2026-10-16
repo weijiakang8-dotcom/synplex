@@ -16,6 +16,7 @@ export class AccountStore{
    CREATE TABLE IF NOT EXISTS account_names(account_id TEXT PRIMARY KEY REFERENCES workspace_accounts(id),username TEXT NOT NULL UNIQUE COLLATE NOCASE);
    CREATE TABLE IF NOT EXISTS account_recovery_events(account_id TEXT PRIMARY KEY REFERENCES workspace_accounts(id),changed_at INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS account_reset_codes(email TEXT PRIMARY KEY,nonce TEXT NOT NULL,code_hash TEXT NOT NULL,expires_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,delivered INTEGER NOT NULL DEFAULT 0);
+   CREATE UNIQUE INDEX IF NOT EXISTS account_email_identity ON workspace_accounts(lower(trim(email)));
    CREATE INDEX IF NOT EXISTS account_session_expiry ON account_sessions(expires_at);`);
  }
  transaction(fn){this.db.exec('BEGIN IMMEDIATE');try{const value=fn();this.db.exec('COMMIT');return value;}catch(error){this.db.exec('ROLLBACK');throw error;}}
