@@ -69,7 +69,17 @@ function importRows(db,bundle,account){
  for(const c of bundle.conversations)insertExact(db,'chat_conversations',{...c,partition:mapping.get(c.partition),actor_id:account.actor_id},['id']);
  for(const r of bundle.requests)insertExact(db,'chat_requests',r,['id']);
  for(const e of bundle.events)insertExact(db,'chat_events',e,['request_id','sequence']);
- for(const g of bundle.grants)insertExact(db,'model_execution_grants',{...g,token_hash:hash('retired:'+bundle.sha256+g.id),body_json:JSON.stringify({...JSON.parse(g.body_json),status:'completed'})},['id']);
+ for(const g of bundle.grants){
+  const value={...g,token_hash:hash('retired:'+bundle.sha256+g.id),body_json:JSON.stringify({...JSON.parse(g.body_json),status:'completed'})};
+  const prior=db.prepare('SELECT * FROM model_execution_grants WHERE id=?').get(g.id);
+  if(prior){
+   const archived=db.prepare("SELECT body_json FROM records WHERE kind='execution_job' AND id=? AND partition IN (SELECT value FROM json_each(?))").all(g.operation_id,JSON.stringify([...mapping.values()]));
+   const retired=archived.some(row=>{const origin=JSON.parse(row.body_json).archiveOrigin;return origin?.kind==='completed_history'&&prior.token_hash===hash('retired:'+origin.fingerprint+g.id);});
+   if(!retired||JSON.parse(prior.body_json).status!=='completed')throw Error('目标执行授权不是已封存记录，停止迁移。');
+   value.token_hash=prior.token_hash;
+  }
+  insertExact(db,'model_execution_grants',value,['id']);
+ }
  for(const c of bundle.calls)insertExact(db,'model_execution_calls',{...c,response:c.response?Buffer.from(c.response,'base64'):null},['id']);
 }
 function appendProjects(repository,directory,account,bundle){
