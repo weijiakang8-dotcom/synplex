@@ -76,28 +76,31 @@ def install_api(app, data):
     from submission_delivery import install_lookup, reserve, receipt, original_execution, submission_hash
     install_lookup(router, data)
 
-    def owns(user):
-        if str(user.organization_id) != data["organization_id"]:
+    async def owns(session, user):
+        from tenant_identity import identity
+        value = await identity(session, data, user.id, user.organization_id)
+        if not value:
             raise HTTPException(404, "Execution connection not found")
+        return value
 
     @router.get("/api/synplex/model-options")
     async def options(session: SessionDep, user: CurrentUserDep):
-        owns(user)
-        _, choices = await available(session, data)
+        current = await owns(session, user)
+        _, choices = await available(session, current)
         return {"protocol": "synplex.engine-selection/1", "choices": choices,
                 "submissionLookup": "synplex.execution-submission/1"}
 
     @router.get("/api/synplex/relay-capabilities")
-    async def relay_capabilities(user: CurrentUserDep):
-        owns(user)
+    async def relay_capabilities(session: SessionDep, user: CurrentUserDep):
+        await owns(session, user)
         from model_relay import enabled
         if not enabled(data):
             raise HTTPException(404, "Private model relay is not configured")
         return {"protocol": "synplex.execution-model/1", "submissionLookup": "synplex.execution-submission/1"}
 
     @router.get("/api/synplex/input-capabilities")
-    async def input_capabilities(user: CurrentUserDep):
-        owns(user)
+    async def input_capabilities(session: SessionDep, user: CurrentUserDep):
+        await owns(session, user)
         from task_tools import document_reader_available
         from python_cases import available
         return {"protocol": PROTOCOL, "sourceFiles": True, "documentText": document_reader_available(), "literalSpreadsheet": document_reader_available(),
@@ -106,8 +109,8 @@ def install_api(app, data):
 
     @router.post("/api/synplex/executions", status_code=202)
     async def start(payload: Start, request: Request, session: SessionDep, user: CurrentUserDep):
-        owns(user)
-        if str(payload.workflow_id) != data["workflow_id"]:
+        current = await owns(session, user)
+        if str(payload.workflow_id) != current["workflow_id"]:
             raise HTTPException(404, "Workflow not found")
         workflow = await session.get(Workflow, payload.workflow_id, options=[noload('*')])
         if not workflow or workflow.organization_id != user.organization_id:
@@ -117,6 +120,8 @@ def install_api(app, data):
             from model_relay import prepare_model
             chosen, effort = await prepare_model(session, data, payload, user)
         else:
+            if current["organization_id"] != data["organization_id"]:
+                raise HTTPException(422, "Tenant execution requires its own model binding")
             models, choices = await available(session, data)
             selection = payload.model_selection.model_dump()
             if not any(option["id"] == selection["model"]
@@ -208,7 +213,8 @@ def install_runtime(data):
     async def bound(function, execution_id, *args, **kwargs):
         async with async_session_factory() as session:
             execution = await session.get(Execution, execution_id, options=[noload('*')])
-            if not execution or str(execution.organization_id) != data["organization_id"] or str(execution.workflow_id) != data["workflow_id"]:
+            from tenant_identity import execution_identity
+            if not await execution_identity(session, data, execution):
                 raise RuntimeError("Execution outside the isolated engine")
             selection = execution.model_selection
         with active_selection(selection):

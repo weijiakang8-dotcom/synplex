@@ -1,3 +1,4 @@
+import {createAccounts} from './accounts.mjs';
 import {initialConnection} from './initial-connection.mjs';
 import {publicAccessOptions,buildInformation} from './public-access.mjs';
 import {createDiagnosticLog} from './diagnostics.mjs';
@@ -42,7 +43,8 @@ const modelRelay=repository.modelRelay();
 const adapters=loadExecutors(dataDir,{relay:modelRelay,relayEndpoint:connection.endpoint+'/internal/model/v1'}),execution=new ExecutionCoordinator({repository,adapters});
 const localProjects=process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'?new LocalProjects({repository,dataDir,connection,rootAuth,allowExecution:!!execution.executors().length}):null;
 const diagnostics=createDiagnosticLog(dataDir);
-const app=createWorkspaceServer({publicLanding:true,repository,modules,localProjects,execution,diagnostics,modelRelay,modelAdmin:auth=>auth.kind==='ui'&&auth.ownerId===rootAuth.ownerId&&auth.actorId===rootAuth.actorId,...publicAccessOptions(),...buildInformation(),publicDir:process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'?join(root,'public'):null});
+const accounts=localProjects?createAccounts({repository,dataDir,localProjects,allowExecution:!!execution.executors().length,...publicAccessOptions()}):null;
+const app=createWorkspaceServer({publicLanding:true,accounts,repository,modules,localProjects,execution,diagnostics,modelRelay,modelAdmin:auth=>auth.kind==='ui'&&auth.ownerId===rootAuth.ownerId&&auth.actorId===rootAuth.actorId||!!accounts?.admin(auth),...publicAccessOptions(),...buildInformation(),publicDir:process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'?join(root,'public'):null});
 let stopping=false;
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{if(stopping)return;stopping=true;await app.close();repository.close();process.exit(0);});
 try{
@@ -54,6 +56,7 @@ try{
       await app.service.recoverImports(selected.auth,p.scope);
       if(selected.auth.capabilities.has('execute'))await execution.recover(selected.auth,p.scope);
     }
+    await accounts?.recover(async selected=>{await app.service.recoverImports(selected.auth,selected.scope);if(selected.auth.capabilities.has('execute'))await execution.recover(selected.auth,selected.scope);});
   }else await app.service.recoverImports(worker,scope);
   let launchFile=null;
   if(process.env.SYNPLEX_WORKSPACE_SERVE_UI==='1'){

@@ -1,3 +1,5 @@
+import {AccountStore} from './account-store.mjs';
+import {accountKey} from './account-mail.mjs';
 import {OBSIDIAN_SOURCE,readNoteIdentity} from '../../public/obsidian-notes.js';
 import {frozenCallAccounting} from './model-pricing.mjs';
 import {ModelRelayStore} from './model-relay-store.mjs';
@@ -56,6 +58,8 @@ function checkMeta(meta) {
 export class WorkspaceRepository {
   #db;
   #chatStore;
+  #accounts;
+  #dataDir;
   #modelVault;
   #modelService;
   #relayStore;
@@ -66,7 +70,7 @@ export class WorkspaceRepository {
   #memory;
   constructor({ dataDir, fault = null, executionLimits }) {
     if (!dataDir) throw new TypeError('An isolated dataDir is required');
-    const dir = resolve(dataDir);
+    const dir = resolve(dataDir);this.#dataDir=dir;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (lstatSync(dir).isSymbolicLink()) throw new TypeError('Data directory cannot be a symbolic link');
     chmodSync(dir, 0o700);
@@ -103,6 +107,7 @@ export class WorkspaceRepository {
       }
     }catch(error){if(error.code!=='ENOENT'){this.#db.close();throw error;}}
   }
+  accounts(options={}) {return this.#accounts??=new AccountStore(this.#db,{codeKey:()=>accountKey(this.#dataDir),...options});}
   close() { this.#db.close(); }
   #partition(ownerId, scope) { return payloadHash({ ownerId, scope }); }
   #row(partition) { return this.#db.prepare('SELECT * FROM scopes WHERE partition=?').get(partition); }

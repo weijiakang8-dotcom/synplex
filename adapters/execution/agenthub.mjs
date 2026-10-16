@@ -30,7 +30,7 @@ function taskSummary(task,cancelled){
 // Reuse the existing authenticated AgentHub engine rather than rebuilding its
 // planner, model gateway, permissions, tool execution and document exporter.
 // Service-configured workflow/identity; imported text cannot supply an endpoint.
-export function createAgentHubExecutor({endpoint,tokenFile,workflowId,dataDir,pollMs=1000,requireWorkerReceipt=false,model,provider='deepseek',effort='low',allowedModels=[],modelBinding}){
+export function createAgentHubExecutor({endpoint,tokenFile,workflowId,dataDir,pollMs=1000,requireWorkerReceipt=false,model,provider='deepseek',effort='low',allowedModels=[],modelBinding,tokenProvider}){
  const url=new URL(endpoint);
  if(url.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(url.hostname)||!url.port||url.pathname!=='/'||url.search||url.hash||url.username||url.password||!uuid(workflowId)||!isAbsolute(dataDir)||!isAbsolute(tokenFile))throw new TypeError('Explicit local AgentHub connection required');
  mkdirSync(dataDir,{recursive:true,mode:0o700});const active=new Map();
@@ -45,7 +45,7 @@ export function createAgentHubExecutor({endpoint,tokenFile,workflowId,dataDir,po
  function load(operationId){const p=journal(operationId);return existsSync(p)?JSON.parse(privateRead(p)):null;}
  function save(operationId,value){const p=journal(operationId);writeFileSync(p+'.tmp',JSON.stringify(value),{mode:0o600});renameSync(p+'.tmp',p);}
  async function request(route,{body,signal,binary=false,timeoutMs=15000}={}){
-  const token=privateRead(tokenFile).trim();if(!token||/[\r\n]/.test(token))fail();
+  const token=tokenProvider?await tokenProvider():privateRead(tokenFile).trim();if(!token||/[\r\n]/.test(token))fail();
   const response=await fetch(url.origin+route,{method:body?'POST':'GET',redirect:'error',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(timeoutMs)]):AbortSignal.timeout(timeoutMs)});
   const chunks=[];let total=0;for await(const chunk of response.body){total+=chunk.length;if(total>(binary?64:8)*1024*1024){await response.body.cancel().catch(()=>{});fail();}chunks.push(chunk);}
   if(!response.ok)fail();const bytes=Buffer.concat(chunks);return binary?bytes:JSON.parse(bytes.toString('utf8'));

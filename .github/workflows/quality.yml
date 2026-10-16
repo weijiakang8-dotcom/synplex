@@ -52,6 +52,13 @@ jobs:
           SYNPLEX_TEST_BUNDLED_BROWSER: '1'
           PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
           SYNPLEX_OBSIDIAN_EVIDENCE_DIR: .runtime/ci-obsidian
+      - name: Accounts, recovery and browser isolation
+        run: node --import ./scripts/testing/offline.mjs scripts/integration/accounts-browser-check.mjs
+        env:
+          SYNPLEX_TEST_NO_MODELS: '1'
+          SYNPLEX_TEST_BUNDLED_BROWSER: '1'
+          PLAYWRIGHT_BROWSERS_PATH: .runtime/test-browsers
+          SYNPLEX_ACCOUNT_EVIDENCE_DIR: .runtime/ci-accounts
       - name: Keep deterministic browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -62,5 +69,6 @@ jobs:
             .runtime/ci-chat-task
             .runtime/ci-home
             .runtime/ci-obsidian
+            .runtime/ci-accounts
           if-no-files-found: ignore
           retention-days: 7

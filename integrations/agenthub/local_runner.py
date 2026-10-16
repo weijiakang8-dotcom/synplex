@@ -296,6 +296,8 @@ def api(data, directory):
     install_api(app, data)
     from model_binding import install_api as install_model_api
     install_model_api(app, data)
+    from tenant_identity import install_api as install_tenant_api, initialize as initialize_tenants
+    install_tenant_api(app, data)
     from approval_delivery import install_api as install_approval_api
     install_approval_api(app, data)
     from task_files import initialize as initialize_task_files
@@ -307,6 +309,7 @@ def api(data, directory):
             await initialize_input_delivery(master_engine)
             await initialize_task_files(master_engine)
             await initialize_submissions(master_engine)
+            await initialize_tenants(master_engine)
             async def dispatch():
                 while True:
                     async with async_session_factory() as session:
@@ -345,14 +348,14 @@ def install_worker_receipt(data):
     async def persist(execution_id, task_id):
         async with async_session_factory() as session:
             execution = await session.get(Execution, uuid.UUID(execution_id), with_for_update=True)
-            if (execution is None or str(execution.workflow_id) != data["workflow_id"]
-                    or str(execution.organization_id) != data["organization_id"]
+            from tenant_identity import execution_identity
+            if (not await execution_identity(session, data, execution)
                     or execution.lease_owner is not None
                     or execution.status not in {ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.ROLLED_BACK, ExecutionStatus.WAITING_FOR_APPROVAL}):
                 return
             execution.checkpoint_data = {**(execution.checkpoint_data or {}), "synplexWorkerReceipt": {
                 "version": "synplex.worker-return/1", "executionId": str(execution.id),
-                "workflowId": data["workflow_id"], "taskId": task_id,
+                "workflowId": str(execution.workflow_id), "taskId": task_id,
                 "statusAtReturn": execution.status.value, "workerReturned": True,
                 "recordedAt": datetime.now(timezone.utc).isoformat()}}
             await session.commit()

@@ -29,7 +29,7 @@ export class LocalProjects {
     let auth=this.repository.authenticate(privateRead(p.uiTokenFile).trim());await this.repository.forScope(auth,p.scope);
     if(this.allowExecution&&!auth.capabilities.has('execute')){
       const dir=join(this.dataDir,'connections',payloadHash(p.scope));mkdirSync(dir,{mode:0o700,recursive:true});
-      const file=join(dir,'ui-execution-token');this.#credential(rootAuth,p.scope,'local-human','ui',['read_memory','write_memory','review_memory','prepare_task','record_result','execute'],file);
+      const file=join(dir,'ui-execution-token');this.#credential(rootAuth,p.scope,rootAuth.actorId,'ui',['read_memory','write_memory','review_memory','prepare_task','record_result','execute'],file);
       auth=this.repository.authenticate(privateRead(file).trim());
     }
     return {auth,scope:structuredClone(p.scope),name:p.name};
@@ -59,7 +59,7 @@ export class LocalProjects {
     }
     const {scope}=entry;mkdirSync(join(this.dataDir,'connections',payloadHash(scope)),{mode:0o700,recursive:true});
     const caps=['read_memory','write_memory','prepare_task','record_result'];
-    for(const [actorId,kind,capabilities,file] of [['local-human','ui',[...caps,'review_memory'],entry.uiTokenFile],['codex-host','agent',caps,entry.agentTokenFile]]){
+    for(const [actorId,kind,capabilities,file] of [[rootAuth.actorId,'ui',[...caps,'review_memory'],entry.uiTokenFile],['codex-host','agent',caps,entry.agentTokenFile]]){
       this.#credential(rootAuth,scope,actorId,kind,capabilities,file);
     }
     entry.status='ready';this.#save();return this.select(rootAuth,scope);

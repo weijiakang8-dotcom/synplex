@@ -108,9 +108,9 @@ def install_api(app, data):
     @router.get("/api/synplex/executions/{execution_id}/usage")
     async def usage(execution_id: uuid.UUID, session: SessionDep, user: CurrentUserDep):
         execution = await session.get(Execution, execution_id, options=[noload("*")])
-        if (str(user.organization_id) != data["organization_id"] or not execution
-                or execution.organization_id != user.organization_id or execution.user_id != user.id
-                or str(execution.workflow_id) != data["workflow_id"]):
+        from tenant_identity import execution_identity
+        if (not await execution_identity(session, data, execution)
+                or execution.organization_id != user.organization_id or execution.user_id != user.id):
             raise HTTPException(404, "没有找到这次任务的用量记录。")
         return await projection(session, execution)
 

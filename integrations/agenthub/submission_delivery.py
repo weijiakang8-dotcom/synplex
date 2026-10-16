@@ -84,13 +84,15 @@ def install_lookup(router, data):
                      session: SessionDep, user: CurrentUserDep,
                      packet_hash: str = Query(pattern="^[a-f0-9]{64}$"),
                      payload_hash: str = Query(pattern="^[a-f0-9]{64}$")):
-        if str(user.organization_id) != data["organization_id"]:
+        from tenant_identity import identity
+        current = await identity(session, data, user.id, user.organization_id)
+        if not current:
             raise HTTPException(404, "Original submission was not found")
         submission = {"operation_id": str(operation_id), "attempt_id": str(attempt_id),
                       "packet_hash": packet_hash, "payload_hash": payload_hash}
         row = await receipt(session, operation_id)
         try:
-            execution = await original_execution(session, row, submission, user, data["workflow_id"])
+            execution = await original_execution(session, row, submission, user, current["workflow_id"])
         except ValueError as error:
             raise HTTPException(404, "Original submission was not found") from error
         # No prompt, input, files, answer or credential is exposed in this lookup.

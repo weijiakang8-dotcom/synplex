@@ -72,6 +72,18 @@ def workspace_bindings(source, target, manifest, *, node, handoff_intent=None):
     return report
 
 
+def binding_identity(connection, data, binding):
+    value = binding.get('engineIdentity')
+    if value is None:
+        return data
+    required = ('organization_id', 'user_id', 'workflow_id', 'agent_id')
+    row = connection.execute("SELECT organization_id,user_id,workflow_id,agent_id FROM synplex_engine_tenants WHERE tenant_id=%s",
+                             (value.get('tenantId'),)).fetchone()
+    if row is None or tuple(map(str, row)) != tuple(value.get(key) for key in required):
+        return None
+    return {**data, **{key: value[key] for key in required}}
+
+
 def find_original_submission(connection, data, binding):
     """A proof from the same snapshot; never bind, schedule or infer from text."""
     row = dict(binding)
@@ -80,8 +92,11 @@ def find_original_submission(connection, data, binding):
         "FROM synplex_execution_submissions WHERE operation_id=%s", (row['operationId'],)).fetchone()
     if receipt is None:
         return {**row, 'state': 'submission_receipt_missing'}
+    current = binding_identity(connection, data, row)
+    if current is None:
+        return {**row, 'state': 'submission_identity_mismatch'}
     expected = (row['attemptId'], row['packetHash'], row['payloadHash'],
-                data['organization_id'], data['user_id'], data['workflow_id'])
+                current['organization_id'], current['user_id'], current['workflow_id'])
     try:
         task_id = str(uuid.UUID(str(receipt[0])))
     except (ValueError, TypeError, AttributeError):
@@ -100,6 +115,10 @@ def inspect_tasks(connection, data, bindings, *, submission_receipts=False):
             row = find_original_submission(connection, data, row) if submission_receipts else {
                 **row, 'state': 'unidentified_submission'}
         if row["state"] == "ready_to_inspect":
+            current = binding_identity(connection, data, row)
+            if current is None:
+                rows.append({**row, "state": "task_identity_mismatch"})
+                continue
             found = row.get('identifiedBy') == 'original_submission_receipt'
             actual = connection.execute(
                 "SELECT e.status, e.workflow_id, e.organization_id, e.user_id, "
@@ -108,8 +127,8 @@ def inspect_tasks(connection, data, bindings, *, submission_receipts=False):
                 (row["taskId"],)).fetchone()
             if actual is None:
                 row["state"] = "task_missing"
-            elif (tuple(map(str, actual[1:6])) != (data["workflow_id"], data["organization_id"],
-                    data["user_id"], data["organization_id"], data["user_id"])
+            elif (tuple(map(str, actual[1:6])) != (current["workflow_id"], current["organization_id"],
+                    current["user_id"], current["organization_id"], current["user_id"])
                     or found and str(actual[6]) != row['operationId']):
                 row["state"] = "task_identity_mismatch"
             else:

@@ -51,7 +51,7 @@ export class ModelVault{
   }
   #usable(auth,id){
     const row=this.#db.prepare('SELECT * FROM model_connections WHERE id=? AND deleted=0').get(id);
-    if(!row||!row.enabled||row.kind!=='builtin'&&(row.owner_id!==auth.ownerId||row.actor_id!==auth.actorId))throw modelFailure('这个模型连接不可用。','请选择可用模型或检查自己的连接。','scope_denied');return row;
+    if(!row||!row.enabled||row.owner_id!==auth.ownerId||row.kind!=='builtin'&&row.actor_id!==auth.actorId)throw modelFailure('这个模型连接不可用。','请选择可用模型或检查自己的连接。','scope_denied');return row;
   }
   #idle(row){if(this.#db.prepare('SELECT 1 FROM model_connection_holds WHERE connection_id=? AND released=0 LIMIT 1').get(row.id))throw modelFailure('仍有任务在使用这份模型连接。','请先结束或核对原任务，再修改连接。','conflict');}
   #mutation(auth,requestId,input,fn){
@@ -65,7 +65,7 @@ export class ModelVault{
       const value=fn();this.#db.prepare('INSERT INTO model_connection_receipts VALUES(?,?,?,?,?)').run(auth.ownerId,auth.actorId,requestId,hash,JSON.stringify(value));this.#db.exec('COMMIT');return value;
     }catch(error){this.#db.exec('ROLLBACK');throw error;}
   }
-  list(auth){return this.#db.prepare("SELECT * FROM model_connections WHERE deleted=0 AND (kind='builtin' OR (owner_id=? AND actor_id=?)) ORDER BY created_at,id").all(auth.ownerId,auth.actorId).map(row=>this.#public(row));}
+  list(auth){return this.#db.prepare("SELECT * FROM model_connections WHERE deleted=0 AND owner_id=? AND (kind='builtin' OR actor_id=?) ORDER BY created_at,id").all(auth.ownerId,auth.actorId).map(row=>this.#public(row));}
   save(auth,{requestId,id=null,revision=null,kind='personal',config,secret},admin=false){
     const checked=validateConnection(config);if(secret!==null)validateSecret(secret);
     if(!['personal','builtin'].includes(kind)||kind==='builtin'&&!admin)throw modelFailure('没有内置模型的管理权限。','请添加自己的模型。','scope_denied');

@@ -1,3 +1,4 @@
+import {engineTenantId} from '../../packages/execution/tenant-identity.mjs';
 // Offline inspection only. Never loads an executor, rewrites a binding or sends HTTP.
 import {existsSync,lstatSync,readFileSync,realpathSync} from 'node:fs';
 import {resolve,join} from 'node:path';
@@ -22,19 +23,33 @@ function unidentifiedBinding(base,binding){
  if(!/^[a-f0-9]{64}$/.test(binding.payloadHash??''))return {...base,state:'unidentified_submission'};
  return {...base,state:'ready_to_find_original',packetHash:binding.packetHash,payloadHash:binding.payloadHash};
 }
-function inspectBinding(db,row,targetKey,restored){
- const body=JSON.parse(row.body_json),base={operationId:row.id,attemptId:body.attemptId,taskId:body.taskId};
+function tenantTarget(db,row,snapshot,restored,source){
+ if(!/^[a-f0-9-]{36}$/i.test(row.id))return null;
+ const base=join('executors/agenthub'),file=join(snapshot,base,'tenant-bindings',row.id+'.json');if(!existsSync(file))return null;
+ const binding=read(file),owner=db.prepare('SELECT owner_id FROM scopes WHERE partition=?').get(row.partition)?.owner_id;
+ if(!owner||binding.operationId!==row.id||binding.ownerId!==owner)throw Error('账号与原任务连接不一致。');
+ const tenantId=engineTenantId(owner),relative=join(base,'tenants',tenantId),identity=read(join(snapshot,relative,'identity.json'));
+ if(identity.ownerId!==owner||identity.tenantId!==tenantId)throw Error('账号执行身份不一致。');
+ for(const key of ['organization_id','user_id','workflow_id','agent_id'])if(typeof identity[key]!=='string'||!/^[a-f0-9-]{36}$/i.test(identity[key]))throw Error('账号执行身份不完整。');
+ const endpoint=new URL(read(join(snapshot,'executors.json')).synplex.endpoint).origin;
+ return {targetKey:payloadHash({endpoint,workflowId:identity.workflow_id,tokenFile:join(source,relative,'access-token')}),journal:join(restored,relative,row.id+'.json'),engineIdentity:identity};
+}
+function journalMatches(journal,row,body,targetKey){
+ if(!existsSync(journal))return true;
+ const saved=read(journal);
+ return saved.operationId===row.id&&saved.attemptId===body.attemptId&&saved.taskId===body.taskId&&saved.targetKey===targetKey;
+}
+function inspectBinding(db,row,targetKey,restored,tenant=null){
+ if(tenant)targetKey=tenant.targetKey;
+ const body=JSON.parse(row.body_json),base={operationId:row.id,attemptId:body.attemptId,taskId:body.taskId,...(tenant?{engineIdentity:tenant.engineIdentity}:{})};
  if(body.binding?.targetKey!==targetKey)return {...base,state:'other_connection'};
  const get=(kind,id)=>{const r=db.prepare('SELECT body_json FROM records WHERE partition=? AND kind=? AND id=?').get(row.partition,kind,id);return r?JSON.parse(r.body_json):null;};
  const job=get('execution_job',row.id),packet=job&&get('context',job.packetId);
  if(body.id!==row.id||job?.attemptId!==body.attemptId||!packet||packet.contentHash!==body.binding.packetHash)return {...base,state:'binding_mismatch'};
  const {contentHash,...content}=packet;if(payloadHash(content)!==contentHash)return {...base,state:'binding_mismatch'};
- const journal=join(restored,'executors/agenthub',row.id+'.json');
+ const journal=tenant?.journal??join(restored,'executors/agenthub',row.id+'.json');
  if(!/^[a-f0-9-]{36}$/i.test(row.id))return {...base,state:'binding_mismatch'};
- if(existsSync(journal)){
-  const saved=read(journal);
-  if(saved.operationId!==row.id||saved.attemptId!==body.attemptId||saved.taskId!==body.taskId||saved.targetKey!==targetKey)return {...base,state:'journal_mismatch'};
- }
+ if(!journalMatches(journal,row,body,targetKey))return {...base,state:'journal_mismatch'};
  if(body.taskId===null)return unidentifiedBinding(base,body.binding);
  if(typeof body.taskId!=='string'||!/^[a-f0-9-]{36}$/i.test(body.taskId))return {...base,state:'binding_mismatch'};
  return {...base,state:'ready_to_inspect'};
@@ -54,7 +69,7 @@ export function inspectRestoredBindings(snapshot,restored,engineSource,bootstrap
  const db=new DatabaseSync(join(restored,'workspace.sqlite'),{readOnly:true});
  try{
   const rows=db.prepare("SELECT partition,id,body_json FROM records WHERE kind='remote_submission' ORDER BY partition,id").all();
-  const bindings=rows.map(row=>inspectBinding(db,row,targetKey,restored)),seen=new Map();
+  const bindings=rows.map(row=>inspectBinding(db,row,targetKey,restored,tenantTarget(db,row,snapshot,restored,manifest.source))),seen=new Map();
   for(const b of bindings)if(b.state==='ready_to_inspect'){
    if(seen.has(b.taskId)){b.state='duplicate_remote_identity';seen.get(b.taskId).state='duplicate_remote_identity';}else seen.set(b.taskId,b);
   }

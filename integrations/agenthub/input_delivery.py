@@ -76,10 +76,10 @@ def install_api(app, data):
     async def original_question(session, user, clarification_id, *, lock=False):
         q = await session.get(Clarification, clarification_id, with_for_update=lock, options=[noload('*')])
         execution = await session.get(Execution, q.execution_id, with_for_update=lock, options=[noload('*')]) if q else None
-        if (not execution or str(execution.workflow_id) != data["workflow_id"]
-                or str(execution.organization_id) != data["organization_id"]
+        from tenant_identity import execution_identity
+        if (not await execution_identity(session, data, execution)
                 or execution.organization_id != user.organization_id
-                or q.organization_id != user.organization_id):
+                or execution.user_id != user.id or q.organization_id != user.organization_id):
             raise HTTPException(404, "Question not found")
         return q, execution
 

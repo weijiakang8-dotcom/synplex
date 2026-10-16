@@ -133,10 +133,9 @@ def install_api(app, data):
 
     async def own(session, user, eid, lock=False):
         row = await session.get(Execution, eid, with_for_update=lock, options=[noload('*')])
-        if (not user.is_active or not row or row.user_id != user.id
-                or row.organization_id != user.organization_id
-                or str(row.organization_id) != data["organization_id"]
-                or str(row.workflow_id) != data["workflow_id"]):
+        from tenant_identity import execution_identity
+        if (not user.is_active or not await execution_identity(session, data, row) or row.user_id != user.id
+                or row.organization_id != user.organization_id):
             raise HTTPException(404, "Operation not found")
         return row
 

@@ -27,6 +27,7 @@ def main():
     p.add_argument('--postgres-bin', required=True, type=Path)
     p.add_argument('--valkey', required=True, type=Path)
     p.add_argument('--node', required=True)
+    p.add_argument('--tenants', action='store_true')
     args = p.parse_args()
     directory = args.directory.absolute()
     if directory.exists():
@@ -54,7 +55,7 @@ def main():
             if time.monotonic() > deadline:
                 raise RuntimeError('Private engine readiness timed out')
             time.sleep(.1)
-        result = subprocess.run([args.node, str(root / 'scripts/integration/model-relay-engine-workspace.mjs'),
+        result = subprocess.run([args.node, str(root / ('scripts/integration/accounts-engine-workspace.mjs' if args.tenants else 'scripts/integration/model-relay-engine-workspace.mjs')),
                                  str(directory), str(ports[3])], cwd=root, env=safe_env(),
                                 capture_output=True, timeout=110)
         output = directory / 'workspace-check.log'
@@ -63,6 +64,12 @@ def main():
         if result.returncode:
             raise RuntimeError('Full-stack fixture failed; inspect preserved private evidence')
         print(result.stdout.decode())
+        if args.tenants:
+            proof = subprocess.run([sys.executable, '-B', str(root / 'scripts/integration/accounts-engine-boundary-check.py'), str(directory)], cwd=root, env=safe_env(), capture_output=True, timeout=30)
+            (directory / 'boundary-check.log').write_bytes(proof.stdout + proof.stderr)
+            if proof.returncode:
+                raise RuntimeError('Tenant engine boundary check failed; inspect private evidence')
+            print(proof.stdout.decode())
     finally:
         if child.poll() is None:
             child.terminate()

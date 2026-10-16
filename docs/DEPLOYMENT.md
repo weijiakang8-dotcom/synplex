@@ -2,7 +2,7 @@
 
 ## 部署形态
 
-Synplex 默认是个人私有工作台。公网部署使用同一位所有者的独立空间：HTTPS → 访问认证 → 一次性工作台连接 → 准确项目权限。它不是把资料库公开给所有访客的注册平台。
+Synplex 提供邮箱注册、登录名或邮箱登录、验证码找回密码。每个账号使用独立的项目、资料、模型连接与执行身份。公网完整部署路径为 HTTPS → 部署访问保护 → 账号登录 → 准确项目权限。先配置发件服务，再开放注册，详见[账号与邮箱](ACCOUNTS.md)。
 
 源码仓库包含容器定义、依赖锁、私有配置模板和自动质量门。容器部署工作台，不自动安装或复用运营者电脑上的 Codex、DSH、模型凭据或执行环境；执行工具需要独立配置。
 
@@ -22,7 +22,11 @@ docker compose --env-file /private/path/deployment.env -f deploy/compose.yml up 
 
 服务只发布到服务器 loopback 的 5260 端口。已有 HTTPS 代理将站点转发到该地址；容器代理要求访问认证，再把请求转发到同容器内的 loopback 工作台。不要把 5200 直接发布到公网，不删除 Origin 或会话保护。
 
-## 连接自己的工作台
+## 登录与原工作台绑定
+
+普通用户从 `/app` 注册或登录，不需要连接码。维护者先在容器内运行 `python3 scripts/runtime/configure-email.py /var/lib/synplex/workspace` 配置发件服务；不要把密钥写入 Compose、命令行参数或构建日志。
+
+下面的一次性入口仅用于原所有者进入尚未绑定账号的旧资料。进入后通过“绑定邮箱”明确带入原项目；不能让第一个普通注册者自动获得旧数据。资料形态容器使用 `/var/lib/synplex`，完整形态使用 `/var/lib/synplex/workspace`。
 
 正常启动后，一次性入口保存在容器数据目录内。维护者在私有终端刷新入口：
 
@@ -75,6 +79,6 @@ docker compose --project-name synplex-full --env-file /private/path/deployment.e
 docker compose --project-name synplex-full --env-file /private/path/deployment.env -f deploy/compose.full.yml up -d
 ```
 
-完整部署的工作台资料位于容器内 `/var/lib/synplex/workspace`，执行后台与数据库位于同一私有卷中的独立目录。先登录受保护工作台，在“任务 → 模型设置”添加连接，再开始真实任务。维护者刷新一次性连接入口可用相同 Compose 命令的 `exec workspace node services/workspace/connect.mjs`，读取工作台子目录的入口。公开首页包含动态星空，并尊重系统的“减少动态效果”。
+完整部署的工作台资料位于容器内 `/var/lib/synplex/workspace`，执行后台与数据库位于同一私有卷中的独立目录。先登录受保护工作台，在“任务 → 模型设置”添加连接，再开始真实任务。网站不会自动取得运营者本机的账号、模型或邮件凭据。维护者刷新原所有者的一次性入口可用相同 Compose 命令的 `exec workspace node services/workspace/connect.mjs`，读取工作台子目录的入口。公开首页包含动态星空，并尊重系统的“减少动态效果”。
 
 目前 `deploy/deploy-synplex` 是既有资料工作台的受限发布入口；不能把它当成完整后台迁移器。完整部署首次切站需管理员按现场代理、私有配置和备份操作，不能只推送源码就宣称线上已有执行能力。CI 会构建并验证完整后台，不替代服务器的切流授权与模型设置。

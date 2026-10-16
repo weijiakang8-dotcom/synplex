@@ -45,3 +45,9 @@ HTTP 使用 `POST /api/v1/{工具名}`；stdio MCP 使用同一组 Schema。`sco
 `POST /api/v1/ui_obsidian_notes`：请求仅含`protocolVersion`与精确`scope`，需要当前UI会话和项目读取权限。返回`items`（笔记库名、相对位置、原件身份/指纹、导入操作状态和锁定状态）及`complete`。不返回本机绝对路径，最多读取最近1000次笔记导入。
 
 笔记上传复用`import_source`：`sourceSystem=obsidian-markdown`、`format=text/markdown`、`formatVersion=1`，`sessionId`为JSON编码的`{vault,path}`，`path`仅允许库内普通`.md`相对位置。精确原文件上传，不拼接说明或改写链接；原件上限2MiB。相同文件重试必须复用原requestId与元数据。服务端拒绝用变更内容替换同位置已锁定资料。
+
+## 账号入口
+
+`GET /api/v1/auth/status`返回注册可用性及当前私人会话是否可绑定原项目。`POST /api/v1/auth/send-code`接收email；`register`接收email/password/code及username、可选inheritLocal（旧客户端不提供username仍可注册，随后可补填）；`login`接收identifier/password，兼容旧email/password（不可同时提供两种标识）；`logout`撤销当前网页登录会话。账号写请求使用JSON、8192字节上限，不记录请求正文。认证会话为HttpOnly、SameSite=Strict的端口独立cookie，公开HTTPS配置启用Secure。`ui_bootstrap.authentication`提供当前账号显示信息。项目接口与扩展仍逐请求验证准确范围，网页Cookie不能变成跨项目凭据。
+
+`POST /api/v1/auth/set-name`接收username，必须有有效的账号会话；只修改当前账号的唯一登录名，返回account的id/email/username。`reset-code`接收email，已注册邮箱通过已配置的发件服务收取验证码，未注册邮箱返回相同的成功结构，不投递；`reset-password`接收email/code/password。重置原子更新密码、消费验证码、撤销当前账号全部网页会话，不自动登录。注册与重置验证码分表、分HMAC域，均5分钟/5次尝试；邮箱限流跨两种用途共享。登录验证与会话签发之间若发生重置，拒绝使用旧密码的签发。登录名修改不改变邮箱、owner、actor、项目范围或已有扩展身份。

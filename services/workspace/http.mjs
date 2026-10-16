@@ -108,7 +108,19 @@ async function servePublicPage({req,res,path,publicDir,publicLanding}){
         }catch(error){if(error.code==='ENOENT'){send(res,404,{error:'页面不存在。'});return true;}throw error;}
       }
 
-export function createWorkspaceServer({repository,modules={},publicDir=null,allowedOrigins=[],secureCookies=false,buildSha=null,importTimeoutMs=300_000,localProjects=null,execution=null,diagnostics=null,modelAdmin=null,chatTransport=undefined,modelRelay=null,publicLanding=false}) {
+async function accountRoute(accounts,args){
+ if(accounts)return accounts.handle(args);
+ if(args.req.method==='GET'&&args.path==='/api/v1/auth/status'){args.send(args.res,200,{enabled:false});return true;}
+ return false;
+}
+
+async function browserSession(accounts,req,port,legacySession,localProjects){
+ const uiSession=await accounts?.session(req,port)??legacySession(req),projectManager=uiSession?.projects??localProjects;
+ if(uiSession&&projectManager)await projectManager.list(uiSession.rootAuth);
+ return {uiSession,projectManager};
+}
+
+export function createWorkspaceServer({repository,modules={},publicDir=null,allowedOrigins=[],secureCookies=false,buildSha=null,importTimeoutMs=300_000,localProjects=null,execution=null,diagnostics=null,modelAdmin=null,chatTransport=undefined,modelRelay=null,publicLanding=false,accounts=null}) {
   const service=new WorkspaceService({repository,modules,importTimeoutMs});
   const expressionLinks=createExpressionLinks(repository);
   const chatRoutes=createChatRoutes({repository,execution,transport:chatTransport});
@@ -136,6 +148,7 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
       if(await servePrivateRoute({req,res,path,url,relay:modelRelay,expressionLinks}))return;
       if(await servePublicPage({req,res,path,publicDir,publicLanding}))return;
       if(!path.startsWith('/api/v1/'))return send(res,404,{error:'接口不存在。'});
+      if(await accountRoute(accounts,{req,res,path,port:server.address().port,parseJSON,send,legacySession:()=>session(req)}))return;
       if(req.method==='POST'&&path==='/api/v1/ui_pair'){
         if(!/^application\/x-www-form-urlencoded(?:;|$)/i.test(req.headers['content-type']??''))throw denied();
         const body=new URLSearchParams((await collect(req,4096)).toString('utf8')),nonce=body.get('pair');
@@ -149,16 +162,16 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
           'Set-Cookie':uiSessionCookie(id,{secureCookies,port:server.address().port})});res.end();return;
       }
       const header=req.headers.authorization;
-      const uiSession=session(req);
-      if(uiSession&&localProjects)await localProjects.list(uiSession.rootAuth);
+      const {uiSession,projectManager}=await browserSession(accounts,req,server.address().port,session,localProjects);
       if(!header?.startsWith('Bearer ')&&!uiSession)throw denied();
       const auth=header?.startsWith('Bearer ')?repository.authenticate(header.slice(7)):uiSession.auth;trace.actor(auth);
       if(req.method==='GET'&&path==='/api/v1/ui_bootstrap'){
         if(!uiSession||auth.kind!=='ui')throw denied();
         const repo=await repository.forScope(auth,uiSession.scope);
-        return send(res,200,{scope:uiSession.scope,state:await repo.getState(),capabilities:capabilityInfo(auth,uiSession.scope),projects:localProjects?await localProjects.list(uiSession.rootAuth):null});
+        return send(res,200,{scope:uiSession.scope,state:await repo.getState(),capabilities:capabilityInfo(auth,uiSession.scope),projects:projectManager?await projectManager.list(uiSession.rootAuth):null,...(accounts?{authentication:accounts.metadata(uiSession)}:{})});
       }
       if(req.method==='POST'&&path==='/api/v1/ui_logout'){
+        if(uiSession?.sessionHash)throw wireFail('validation_failed','请从账号入口退出登录。','使用退出登录按钮。');
         if(uiSession){for(const [id,s] of sessions)if(s===uiSession)sessions.delete(id);}
         return send(res,200,{ok:true},{'Set-Cookie':uiSessionCookie('',{secureCookies,maxAge:0,port:server.address().port})});
       }
@@ -245,20 +258,20 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         return send(res,200,repository.executionState(auth,input.scope,input.operationId));
       }
       if(path==='/api/v1/ui_extension'){
-        if(!localProjects||!uiSession||header||auth.kind!=='ui'||Object.keys(input).sort().join(',')!=='host,protocolVersion,scope'||input.protocolVersion!==PROTOCOL_VERSION||!['codex','dsh'].includes(input.host))throw denied();
+        if(!projectManager||!uiSession||header||auth.kind!=='ui'||Object.keys(input).sort().join(',')!=='host,protocolVersion,scope'||input.protocolVersion!==PROTOCOL_VERSION||!['codex','dsh'].includes(input.host))throw denied();
         await repository.forScope(auth,input.scope);
-        const connection=await localProjects.connection(uiSession.rootAuth,input.scope,input.host),bytes=await buildDistribution(input.host,connection);
+        const connection=await projectManager.connection(uiSession.rootAuth,input.scope,input.host),bytes=await buildDistribution(input.host,connection);
         res.writeHead(200,{'Content-Type':'application/gzip','Content-Disposition':`attachment; filename="synplex-${input.host}-workspace.tgz"`,
           'Content-Length':bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(bytes);return;
       }
       if(['ui_create_project','ui_select_project'].includes(path.slice('/api/v1/'.length))){
-        if(!localProjects||!uiSession||header||auth.kind!=='ui'||input.protocolVersion!==PROTOCOL_VERSION)throw denied();
+        if(!projectManager||!uiSession||header||auth.kind!=='ui'||input.protocolVersion!==PROTOCOL_VERSION)throw denied();
         const creating=path.endsWith('ui_create_project');
         if(Object.keys(input).sort().join(',')!==(creating?'name,protocolVersion,requestId,scope':'protocolVersion,scope'))throw denied();
-        if(creating)await localProjects.select(uiSession.rootAuth,input.scope);
-        const chosen=creating?await localProjects.create(uiSession.rootAuth,input):await localProjects.select(uiSession.rootAuth,input.scope);
-        uiSession.auth=chosen.auth;uiSession.scope=chosen.scope;
-        return send(res,200,{scope:chosen.scope,state:await (await repository.forScope(chosen.auth,chosen.scope)).getState(),projects:await localProjects.list(uiSession.rootAuth)});
+        if(creating)await projectManager.select(uiSession.rootAuth,input.scope);
+        const chosen=creating?await projectManager.create(uiSession.rootAuth,input):await projectManager.select(uiSession.rootAuth,input.scope);
+        accounts?.selectSession(uiSession,chosen.scope);uiSession.auth=chosen.auth;uiSession.scope=chosen.scope;
+        return send(res,200,{scope:chosen.scope,state:await (await repository.forScope(chosen.auth,chosen.scope)).getState(),projects:await projectManager.list(uiSession.rootAuth)});
       }
       if(path==='/api/v1/ui_find_evidence'){
         if(auth.kind!=='ui'||Object.keys(input).sort().join(',')!=='cursor,includeHistory,limit,protocolVersion,query,scope'||input.protocolVersion!==PROTOCOL_VERSION||input.cursor!==null&&(typeof input.cursor!=='string'||input.cursor.length>4096))throw denied();

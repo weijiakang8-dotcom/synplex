@@ -46,7 +46,8 @@ test('model vault preserves owner boundaries, encrypted revisions, intent receip
     assert.equal(disabled.enabled,false);assert.throws(()=>vault.acquire(alice,choice,'task-four'),/不可用/);
     vault.change(alice,{requestId:'enable',id:saved.id,revision:3,action:'enable'});
     const builtin=vault.save(alice,{requestId:'builtin',kind:'builtin',config,secret},true);
-    assert.equal(vault.list(eve)[0].id,builtin.id);
+    assert.equal(vault.list(eve).length,0);assert.equal(vault.list(bob)[0].id,builtin.id);
+    assert.throws(()=>vault.acquire(eve,{connectionId:builtin.id,model:'example-model',effort:'high'},'cross-tenant-builtin'),/不可用/);
     assert.throws(()=>vault.change(eve,{requestId:'delete-builtin',id:builtin.id,revision:1,action:'delete'},true),/管理权限/);
     const reloaded=new ModelVault(db,dir);
     assert.equal(reloaded.acquire(alice,choice,'task-five').secret,secret+'new');reloaded.release(alice,'task-five');

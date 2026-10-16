@@ -1,3 +1,4 @@
+import {safeAccountFailure} from './account-security.mjs';
 import {safeModelConnectionError} from './model-error.mjs';
 import { ProtocolError, PROTOCOL_VERSION, schema, validateWire, validatePrepare } from '../../packages/contracts/validate.mjs';
 
@@ -165,6 +166,7 @@ export class WorkspaceService {
 
 // Never send raw exception messages, source text, connection secrets or provider payloads to clients.
 export function safeError(error, operationId = null) {
+  const accountError=safeAccountFailure(error,operationId);if(accountError)return validateWire('Error',accountError);
   const modelError=safeModelConnectionError(error,operationId);
   if(modelError)return validateWire('Error',modelError);
   const table = {

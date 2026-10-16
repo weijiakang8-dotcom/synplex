@@ -1,3 +1,5 @@
+import {accountStorage} from '../../public/account-storage.js';
+import {accountControls,accountLogoutLabel} from '../../public/accounts.js';
 import {connectionScreen,showStartupFailure} from '../../public/workspace-startup.js';
 import {bindModelUsageReview,executionModelUsage} from '../../public/model-usage.js';
 import {createChatTask} from '../../public/chat-task.js';
@@ -32,12 +34,14 @@ function page(view, executions = [], fixture = {}) {
   const app = { addEventListener() {}, querySelector(){return null;}, innerHTML: '' };
   const node = { addEventListener() {}, setAttribute() {}, classList: { add() {}, remove() {} } };
   const sandbox = {
+    accountStorage,accountControls,accountLogoutLabel,createAccountUI:()=>({show:async()=>{app.innerHTML=connectionScreen();}}),
     obsidianImportButton,bindObsidianImport(){},connectionScreen,showStartupFailure,bindModelUsageReview,executionModelUsage,taskChatReferenceField,chatReferenceCard,createChatTask,bindModelSettings,modelSettingsButton,bindPageFinder,bindInputMethodGuard(){},createWorkspaceLayout(){return {capture(){},attach(){},clear(){}};},approvalDetails,questionAction,questionHelp,waitingLabel,
     taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice,TASK_STATUS, taskTitle, activityText, executionActivity, systemText, readableText, errorText, backgroundNote, fileLabel, modelControls,usageCard,budgetCard,conflictCard,conflictTitle,readConflictChoice,uploadFormat,sourceExtension,documentExtension,planEditor,taskPlanCards,revisionForm,stepNote,followupForm,conversationCard,currentQuestion,originalGoal,
     traceError,supportMessage,runtimeStatusCard,createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS,createFileActions,observeActions(){},captureResultForms,restoreResultForms,claimEditor,sourceEditor,categoryFilter,AUTHORING_REQUESTS,pendingAuthoring,authoringRecovery,sourceBriefDialog,claimVersionDialog,claimComparison,metadataHistory,resultSelectionRecovery,bindResultSelection,selectedResultNeedsReview,
     document: { querySelector: s => s === '#app' ? app : node, createElement: () => node,
       body: { append() {} }, addEventListener() {} },
-    sessionStorage: { getItem: () => null },
+    sessionStorage: { getItem: () => null, setItem(){}, removeItem(){},length:0 },
+    location:{search:''},URLSearchParams,
     setInterval() {}, setTimeout() {}, clearTimeout() {},
     window: { addEventListener() {} },
     fetch:async()=>({ok:false,status:403,json:async()=>({code:'scope_denied'}),headers:{get(){return null;}}}),console
@@ -46,6 +50,7 @@ function page(view, executions = [], fixture = {}) {
     .replace(/^import .*?;\n/gm, '').replace(/^start\(\);$/m, '');
   if (fixture.connection) return vm.runInNewContext(code + '\nstart();', sandbox).then(() => app.innerHTML);
   vm.runInNewContext(code + `\nview=${JSON.stringify(view)};
+    storage.bind('fixture');
     scope={projectId:'fixture',versionId:null,branchId:null};
     projects=[{scope,name:'合成项目'}];capabilities=${JSON.stringify(fixture.capabilities||{executors:[]})};
     state={facts:[],decisions:[],failures:[],lessons:[],pending:[],conflicts:[]};

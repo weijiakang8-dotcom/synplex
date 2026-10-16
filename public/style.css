@@ -84,3 +84,6 @@
 #chat-composer textarea{width:100%;resize:vertical;min-height:90px}
 #chat-composer .chat-controls{margin-top:12px}
 @media(max-width:600px){.chat-controls{align-items:stretch}.chat-controls label{min-width:0;flex-basis:42%}.chat-controls button{flex:1}.chat-turn{padding:16px 0}}
+
+/* Account flow inherits the workspace's existing surfaces and typography. */
+.account-screen{max-width:430px}.account-screen form{display:grid;gap:14px}.account-screen label{display:grid;gap:6px}.account-screen input{width:100%;min-width:0}.account-password,.account-code{display:flex;gap:8px}.account-password input,.account-code input{flex:1}.account-password button,.account-code button{flex-shrink:0}.account-screen .account-claim{display:flex;align-items:center;gap:8px}.account-claim input{width:auto}.account-screen>a:last-child{display:block;margin-top:12px}.account-brand{display:block}.account-screen [role=alert]:empty{display:none}

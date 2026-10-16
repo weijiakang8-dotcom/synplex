@@ -1,3 +1,4 @@
+import {ACCOUNT_TABLES} from '../../services/workspace/account-store.mjs';
 import {RELAY_TABLES} from '../../services/workspace/model-relay-store.mjs';
 import {CHAT_TABLES} from '../../services/workspace/chat-store.mjs';
 import {MODEL_TABLES,verifyModelData} from '../../services/workspace/model-vault.mjs';
@@ -59,7 +60,7 @@ export function inspectDatabase(file){
   const missing=db.prepare(`SELECT 1 FROM records r JOIN scopes s ON s.partition=r.partition LEFT JOIN raw_blobs b ON b.owner_id=s.owner_id AND b.sha256=json_extract(r.body_json,'$.sha256')
     WHERE r.kind IN ('source','artifact_file') AND (b.sha256 IS NULL OR length(b.bytes)!=json_extract(r.body_json,'$.byteLength')) LIMIT 1`).get();if(missing)throw new Error('备份缺少原件或成果，不能继续恢复。');
   const tables=['schema_versions','scopes','credentials','records','receipts','authorizations','outbox','quarantined_conflicts'];
-  for(const name of [...MODEL_TABLES,...MODEL_SERVICE_TABLES,...CHAT_TABLES,...RELAY_TABLES])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name))tables.push(name);
+  for(const name of [...ACCOUNT_TABLES,...MODEL_TABLES,...MODEL_SERVICE_TABLES,...CHAT_TABLES,...RELAY_TABLES])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name))tables.push(name);
   const digest=createHash('sha256');for(const name of tables){digest.update(name);for(const row of db.prepare('SELECT * FROM '+name+' ORDER BY rowid').iterate())digest.update(payloadHash({...row}));}
   digest.update('raw_blobs');for(const row of db.prepare('SELECT owner_id,sha256,length(bytes) byteLength FROM raw_blobs ORDER BY rowid').iterate())digest.update(payloadHash({...row}));const contentHash=digest.digest('hex');
   const chatUnresolved=tables.includes('chat_requests')?db.prepare("SELECT count(*) n FROM chat_requests WHERE status IN ('queued','running','unknown')").get().n:0;
@@ -116,6 +117,7 @@ export function restoreWorkspace(source,target,{port}={}){
  const write=(name,value)=>writeFileSync(join(target,name),JSON.stringify(value,null,2),{mode:0o600});
  const connection=privateJSON(join(target,'connection.json'));validateWire('Scope',connection.scope);connection.endpoint=`http://127.0.0.1:${port}`;connection.uiTokenFile=map(connection.uiTokenFile);connection.agentTokenFile=map(connection.agentTokenFile);write('connection.json',connection);
  const catalog=join(target,'projects.json');if(existsSync(catalog)){const c=privateJSON(catalog);for(const p of c.entries)for(const key of ['uiTokenFile','agentTokenFile','dshTokenFile'])if(p[key])p[key]=map(p[key]);write('projects.json',c);}
+ const accounts=join(target,'accounts');if(existsSync(accounts))for(const name of readdirSync(accounts)){const base=join('accounts',name),file=join(target,base,'connection.json');if(!existsSync(file))continue;const c=privateJSON(file);c.endpoint=connection.endpoint;c.uiTokenFile=map(c.uiTokenFile);c.agentTokenFile=map(c.agentTokenFile);write(join(base,'connection.json'),c);const catalog=join(target,base,'projects.json');if(existsSync(catalog)){const value=privateJSON(catalog);for(const p of value.entries)for(const key of ['uiTokenFile','agentTokenFile','dshTokenFile'])if(p[key])p[key]=map(p[key]);write(join(base,'projects.json'),value);}}
  const executors=join(target,'executors.json');if(existsSync(executors))renameSync(executors,join(target,'executors.before-recovery.json'));
  const product=join(target,'product-start.json');if(existsSync(product))renameSync(product,join(target,'product-start.before-recovery.json'));
  write('recovery.json',{format:'synplex.safe-restoration/1',restoredAt:new Date().toISOString(),snapshot:source,unresolved:manifest.data.unresolved,executorsEnabled:false,

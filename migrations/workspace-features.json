@@ -10,6 +10,8 @@
     "chat-continuity/1",
     "execution-model-connections/1",
     "chat-task-reference/1",
-    "model-price-snapshots/1"
+    "model-price-snapshots/1",
+    "tenant-accounts/1",
+    "account-recovery/1"
   ]
 }

@@ -33,7 +33,7 @@ export function requiredDataFeatures(database){
   if(db.prepare("SELECT 1 FROM records WHERE kind='context' AND json_type(body_json,'$.chatReference') IS NOT NULL LIMIT 1").get())features.push('chat-task-reference/1');
   if(db.prepare("SELECT 1 FROM records WHERE kind='execution_question' AND json_type(body_json,'$.prompt.approval') IS NOT NULL LIMIT 1").get())features.push('operation-approval/1');
   if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_connections'").get()&&db.prepare("SELECT 1 FROM model_connections WHERE EXISTS (SELECT 1 FROM json_each(config_json,'$.models') WHERE json_type(value,'$.pricing')='object') LIMIT 1").get())features.push('model-price-snapshots/1');
-  for(const [table,feature] of [['model_connections','model-connections/1'],['chat_conversations','chat-continuity/1'],['model_execution_grants','execution-model-connections/1']]){
+  for(const [table,feature] of [['account_recovery_events','account-recovery/1'],['account_names','account-recovery/1'],['account_reset_codes','account-recovery/1'],['workspace_accounts','tenant-accounts/1'],['model_connections','model-connections/1'],['chat_conversations','chat-continuity/1'],['model_execution_grants','execution-model-connections/1']]){
    if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)&&db.prepare('SELECT 1 FROM '+table+' LIMIT 1').get())features.push(feature);
   }
   return [...new Set(features)].sort();
