@@ -14,6 +14,7 @@ import { ProtocolError, PROTOCOL_VERSION, validateWire } from '../../packages/co
 import { WorkspaceService, safeError } from './service.mjs';
 import { verifyArtifact } from './artifacts.mjs';
 import { buildDistribution } from '../../plugins/distribution.mjs';
+import {isAccountPage} from '../../public/account-navigation.js';
 
 const MiB = 1024 * 1024;
 const statusFor = error => ({ validation_failed: 400, scope_denied: 403, conflict: 409, stale_context: 409,
@@ -97,7 +98,7 @@ async function serveUiRoute(context,res,expressionLinks){
 
 async function servePublicPage({req,res,path,publicDir,publicLanding}){
       if(req.method!=='GET'||path.startsWith('/api/')||!publicDir)return false;
-        let relative;try{relative=decodeURIComponent(path==='/'?(publicLanding?'/home/index.html':'/index.html'):path==='/app'||path==='/app/'?'/index.html':path);}catch{throw wireFail('validation_failed','页面路径无效。','使用工作台入口。');}
+        let relative;try{relative=decodeURIComponent(path==='/'?(publicLanding?'/home/index.html':'/index.html'):path==='/app'||path==='/app/'||isAccountPage({pathname:path,search:''})?'/index.html':path);}catch{throw wireFail('validation_failed','页面路径无效。','使用工作台入口。');}
         const root=resolve(publicDir),file=resolve(root,`.${relative}`);
         if(!file.startsWith(root+sep)) throw denied();
         const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.png':'image/png','.svg':'image/svg+xml'};

@@ -1,4 +1,5 @@
 import {accountStorage} from './account-storage.js';
+import {isAccountPage} from './account-navigation.js';
 import {createAccountUI,accountControls,accountLogoutLabel} from './accounts.js';
 import {bindObsidianImport,obsidianImportButton} from './obsidian-import.js';
 import {connectionScreen,showStartupFailure} from './workspace-startup.js';
@@ -407,7 +408,7 @@ app.addEventListener('submit',async e=>{
 });
 async function start(){
  let data;
- if(new URLSearchParams(location.search).has('account')){try{await accountUI.show();}catch(error){showStartupFailure(app,{error,describe:errorText,retry:start});}return;}
+ if(isAccountPage(location)){try{await accountUI.show();}catch(error){showStartupFailure(app,{error,describe:errorText,retry:start});}return;}
  try{data=await request('ui_bootstrap');}
  catch(error){
   scope=null;
