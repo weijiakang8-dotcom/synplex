@@ -35,7 +35,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/*',route=>{const target=new URL(route.request().url());if(target.origin!==url){external.push(target.origin);return route.abort();}return route.continue();});
  const pair=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0})).status(),303);
- await page.goto(url);await page.locator('nav [data-nav=task]').click();
+ await page.goto(url);await page.locator('nav [data-open-task=execute]').click();
  const node=id=>page.locator(`[data-ai-id="step:${plan.id}:${id}"]`);
  const actions=()=>page.evaluate(async()=>{const {availableOperations}=await import('/semantic-actions.js');return availableOperations().filter(a=>a.action==='start_plan_step');});
  assert.equal((await actions()).length,2);assert.equal(calls,0);assert.equal(await node('dependent').locator('[data-action=start-plan-step]').count(),0);

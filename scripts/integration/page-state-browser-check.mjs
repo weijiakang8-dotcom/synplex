@@ -30,7 +30,7 @@ try{
  const inputMethod=process.env.SYNPLEX_IME_CHECK==='1'?await checkInputMethod(page,evidence,scope):null;
  const nav=id=>page.locator(`[data-nav="${id}"]`).first().click(),tab=id=>page.locator(`[role=tab][data-id="${id}"]`);
  await nav('materials');await page.locator('[name=material]').fill('决定：这段资料只属于第一个项目。');
- await nav('task');await page.locator('[name=goal]').fill('整理项目总结');await page.locator('[name=acceptance]').fill('一份有来源的总结');
+ await nav('task');await page.locator('[data-task-mode=execute]').click();await page.locator('[name=goal]').fill('整理项目总结');await page.locator('[name=acceptance]').fill('一份有来源的总结');
  await tab('materials').click();assert.equal(await page.locator('[name=material]').inputValue(),'决定：这段资料只属于第一个项目。');
  await page.locator('.page-menu summary').click();await page.locator('[data-action=pin-page]').click();assert.equal(await page.locator('[data-action=close-page][data-id=materials]').count(),0);
  await nav('history');await page.locator('[name=query]').fill('没有提交的查找内容');await nav('new-project');await page.locator('[name=name]').fill('尚未创建的名称');

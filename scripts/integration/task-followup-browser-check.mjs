@@ -24,7 +24,7 @@ try{
  const page=await browser.newPage({viewport:{width:390,height:844}}),errors=[],external=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>{if(new URL(route.request().url()).origin===url)return route.continue();external.push(route.request().url());return route.abort();});
  const pair=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0})).status(),303);
- await page.goto(url);const nav=id=>page.locator(`nav [data-nav="${id}"]`).click();await nav('task');
+ await page.goto(url);const nav=id=>page.locator(`nav [data-nav="${id}"]`).click();await nav('task');await page.locator('[data-task-mode=execute]').click();
  const taskForm=page.locator('#task-form');await taskForm.locator('[name=goal]').fill('整理一份项目报告');await taskForm.locator('[name=constraints]').fill('不访问其他项目');await taskForm.locator('[name=acceptance]').fill('交付可下载的文件');await taskForm.locator('[name=executor]').selectOption('codex');
  await page.route(url+'/api/v1/prepare_task',async route=>{await route.fetch();await route.abort('failed');});await taskForm.locator('button[type=submit],button.primary').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('不要重复提交'));
  assert.equal(repository.list(auth,scope,'run').length,1);assert.equal(calls,0);const original=repository.list(auth,scope,'run')[0];

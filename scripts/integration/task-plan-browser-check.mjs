@@ -23,7 +23,7 @@ try{
  const page=await browser.newPage({viewport:{width:390,height:844}}),errors=[];let quoteRequests=0;page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url()===url+'/api/v1/ui_task_routes')quoteRequests++;});
  await page.addInitScript(()=>Object.defineProperty(globalThis,'showSaveFilePicker',{value:undefined,configurable:true}));
  const pair=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0})).status(),303);
- await page.goto(url);await page.locator('nav [data-nav="task"]').click();
+ await page.goto(url);await page.locator('nav [data-open-task=execute]').click();
  await page.locator('#task-form [name="goal"]').fill('整理数据，完成报告');await page.locator('#task-form [name="acceptance"]').fill('保留真实数据，交付报告文件');await page.locator('#task-form [name="executor"]').selectOption('codex');await page.locator('#task-form button.primary').click();
  await page.waitForFunction(()=>!!document.querySelector('#task-plan-form'));
  await page.locator('details').filter({has:page.locator('#task-plan-form')}).evaluate(e=>e.open=true);

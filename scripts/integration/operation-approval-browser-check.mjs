@@ -40,7 +40,7 @@ try{
  page=await browser.newPage({viewport:{width:390,height:844}});const errors=[],external=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>{if(new URL(route.request().url()).origin===url)return route.continue();external.push(route.request().url());return route.abort();});
  const pairing=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pairing.nonce},maxRedirects:0})).status(),303);
- await page.goto(url);await page.locator('nav [data-nav=task]').click();
+ await page.goto(url);await page.locator('nav [data-open-task=execute]').click();
  const form=page.locator('#task-form');await form.locator('[name=goal]').fill('准备项目报告，发送前让我确认');await form.locator('[name=acceptance]').fill('操作内容需要我逐次确认');await form.locator('[name=executor]').selectOption('synplex');
  await form.locator('button.primary').click();await page.locator('[data-action=start-execution]').click();
  const approval=page.locator('.question-form');await approval.waitFor();assert.equal(effects,0);assert.equal(await approval.locator('input:checked').count(),0);

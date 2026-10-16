@@ -40,7 +40,7 @@ const errors=[];
 try{
  const page=await browser.newPage({viewport:{width:390,height:844}});page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
  const pair=await app.createUiPairing(auth,scope);assert.equal((await page.request.post(url+'/api/v1/ui_pair',{form:{pair:pair.nonce},maxRedirects:0})).status(),303);
- await page.goto(url);await page.locator('nav [data-nav="task"]').click();
+ await page.goto(url);await page.locator('nav [data-open-task=execute]').click();
  await page.locator('[name="goal"]').fill('完成一份项目说明');await page.locator('[name="acceptance"]').fill('交付可下载的说明');
  await page.locator('[name="executor"]').selectOption('codex');await page.locator('[data-ai-action="select_model"]').selectOption('two');await page.locator('[data-ai-action="select_effort"]').selectOption('high');
  await page.locator('nav [data-nav="history"]').click();await page.locator('nav [data-nav="task"]').click();assert.equal(await page.locator('[name="model"]').inputValue(),'two');
