@@ -1,6 +1,5 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -9,7 +8,7 @@ const args=new Set(process.argv.slice(2));
 function run(command,argv){
   const result=spawnSync(command,argv,{cwd:root,stdio:'inherit',env:{...process.env,SYNPLEX_TEST_NO_MODELS:'1'}});
   if(result.error)throw result.error;
-  if(result.status!==0)process.exit(result.status??1);
+  if(result.status!==0){console.error(`检查子进程未完成：${command} ${argv[0]}，退出码=${result.status??'无'}，信号=${result.signal??'无'}`);process.exit(result.status??1);}
 }
 function sources(dir){
   return readdirSync(dir,{withFileTypes:true}).flatMap(entry=>{
@@ -24,10 +23,9 @@ if(args.has('--assets')){
   const manifest=JSON.parse(readFileSync(file,'utf8'));
   const protectedFiles=manifest.files.filter(f=>['agenthub','synplex','weave'].includes(f.product));
   if(protectedFiles.length!==711)throw new Error('旧资产清单数量不符，请先核对基线。');
-  for(const f of protectedFiles){
-    if(!existsSync(f.path)||createHash('sha256').update(readFileSync(f.path)).digest('hex')!==f.sha256)
-      throw new Error(`旧资产发生变化：${f.path}`);
-  }
+  const {auditLegacyAssets}=await import('./quality/legacy-assets.mjs');
+  const results=await auditLegacyAssets(protectedFiles),failed=results.filter(r=>r.status!=='unchanged');
+  if(failed.length){for(const r of failed)console.error(`${r.status==='changed'?'旧资产发生变化':'旧资产尚未核验'}：${r.path}${r.reason?'；'+r.reason:''}`);throw new Error(`旧资产核验未通过：${results.length-failed.length}份一致，${failed.length}份需处理；未修改任何旧文件。`);}
   process.stdout.write('711份旧资产指纹一致。\n');
 }
 if(!args.has('--assets-only')){

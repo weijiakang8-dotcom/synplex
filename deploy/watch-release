@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# One approved release slot, bounded to 24h. Closing the browser is harmless.
+set -Eeuo pipefail
+umask 077
+[[ $EUID == 0 && ${1:-} =~ ^synplex-production-[a-z0-9-]+$ ]] || exit 2
+tag=$1
+deadline=$((SECONDS+86400))
+repo=https://github.com/weijiakang8-dotcom/synplex.git
+while (( SECONDS < deadline )); do
+ sha=$(git ls-remote --refs "$repo" "refs/tags/$tag" | cut -f1) || { sleep 60; continue; }
+ if [[ $sha =~ ^[0-9a-f]{40}$ ]]; then
+  main=$(git ls-remote "$repo" refs/heads/main | cut -f1)
+  [[ $sha == "$main" ]] || { echo 'Release tag is not current main; stopped'; exit 4; }
+  if curl --fail --silent --show-error --max-time 20 "https://api.github.com/repos/weijiakang8-dotcom/synplex/commits/$sha/check-runs?per_page=100" |
+   python3 -c 'import json,sys; rows=json.load(sys.stdin)["check_runs"]; latest={}; [(latest.update({r["name"]:r["conclusion"]})) for r in sorted(rows,key=lambda r:r.get("started_at") or "")]; assert all(latest.get(n)=="success" for n in ["check","linux-workspace","container","full-container"])'; then
+   exec /usr/local/sbin/deploy-synplex-full "$sha"
+  fi
+ fi
+ sleep 90
+done
+echo 'Release slot expired without deployment'
+exit 5

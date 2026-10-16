@@ -185,3 +185,26 @@ test('backup restores encrypted model revisions, interrupted chat identity and h
     repo.close();repo=null;const master=join(restored.dataDir,'model-vault-key'),original=readFileSync(master);writeFileSync(master,Buffer.alloc(32,9));assert.throws(()=>inspectDatabase(join(restored.dataDir,'workspace.sqlite')),/安全资料不一致/);writeFileSync(master,original);
   }finally{repo?.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+// Official transport choices must survive discovery, chat, probing and execution.
+test('DeepSeek Flash explicit thinking choices reach provider without changing other services',async()=>{
+ const {modelReasoningOptions}=await import('../../services/workspace/model-options.mjs');
+ const {buildChatBody}=await import('../../services/workspace/model-stream.mjs');
+ const {discoveredModels}=await import('../../public/model-profiles.js');
+ const endpoint='https://api.deepseek.com/v1',binding={model:'deepseek-flash',protocol:'chat-completions',effort:'none',maxOutputTokens:256};
+ assert.deepEqual(discoveredModels({models:['deepseek-flash']},endpoint)[0].capabilities.efforts,['none','low','high','max']);
+ assert.deepEqual(discoveredModels({models:['deepseek-flash']},'https://proxy.example.com')[0].capabilities.efforts,[]);
+ const chat=buildChatBody(binding,[{role:'user',content:'test'}],true,endpoint);
+ assert.deepEqual(chat.thinking,{type:'disabled'});assert.equal(chat.reasoning_effort,undefined);
+ for(const effort of ['low','high','max']){const body=modelReasoningOptions({...binding,effort},{},endpoint);assert.equal(body.reasoning_effort,effort);assert.equal(body.thinking.type,'enabled');}
+ assert.equal(modelReasoningOptions({...binding,effort:null},{},endpoint).thinking,undefined);
+ assert.equal(modelReasoningOptions(binding,{},'https://proxy.example.com').reasoning_effort,'none');
+ assert.equal(modelReasoningOptions({...binding,protocol:'responses'},{},endpoint).reasoning.effort,'none');
+ const dir=mkdtempSync(join(tmpdir(),'synplex-flash-')),db=new DatabaseSync(join(dir,'workspace.sqlite')),vault=new ModelVault(db,dir),calls=[];
+ const wrapped={save:(i,a)=>vault.save(alice,i,a),acquire:(s,h)=>vault.acquire(alice,s,h),release:h=>vault.release(alice,h)};
+ const service=new ModelService({models:()=>wrapped},db,{transport:async input=>{calls.push(input);return Buffer.from(JSON.stringify({choices:[{message:{content:'OK'}}]}));}});
+ try{const saved=await service.call(alice,{requestId:'save-flash',secret,config:{...config,endpoint,models:[{id:'deepseek-flash',name:'Flash',capabilities:{tools:true,stream:false,efforts:['none','high'],contextWindow:32000}}]}},'save');
+ await service.call(alice,{requestId:'probe-flash',consent:true,selection:{connectionId:saved.connection.id,model:'deepseek-flash',effort:'none'}},'probe');
+ assert.equal(calls.length,1);assert.deepEqual(calls[0].body.thinking,{type:'disabled'});assert.equal(calls[0].body.reasoning_effort,undefined);
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});

@@ -3,6 +3,7 @@ import {connectionPrice} from './model-pricing.mjs';
 import {modelFailure} from './model-contract.mjs';
 import {modelRequest,modelTransferLimits} from './model-network.mjs';
 import {probeUsage} from './model-service.mjs';
+import {modelReasoningOptions} from './model-options.mjs';
 
 export const modelChoiceId=(connectionId,model)=>connectionId+'.'+payloadHash(model);
 export function executionModelChoices(connections){return connections.filter(c=>c.enabled).flatMap(c=>c.models.filter(m=>m.capabilities.tools).map(m=>({id:modelChoiceId(c.id,m.id),label:c.name+' · '+m.name,provider:'synplex',efforts:['default',...m.capabilities.efforts],...(m.pricing?{pricing:connectionPrice(c.id,m),estimateLimits:{contextWindow:m.capabilities.contextWindow,maxOutputTokens:c.maxOutputTokens,maxCalls:24}}:{})})));}
@@ -15,7 +16,7 @@ function outputBound(body,binding){
  if(!Number.isSafeInteger(requested)||requested<1)throw modelFailure('本次回复长度设置不正确。');
  return Math.min(requested,binding.maxOutputTokens);
 }
-function providerBody(grant,body){
+function providerBody(grant,body,endpoint){
   const b=grant.binding,stream=body.stream===true;
   if(body.model!==grant.virtualModel||!Array.isArray(b.protocol==='responses'?body.input:body.messages))throw modelFailure('本次模型请求与任务不一致。');
   const wanted=body.reasoning_effort??body.reasoning?.effort??null;
@@ -28,7 +29,7 @@ function providerBody(grant,body){
   if(b.protocol==='responses')value.store=false;
   if(stream&&b.protocol==='chat-completions')value.stream_options={include_usage:true};
   if(Buffer.byteLength(JSON.stringify(value))+outputLimit>b.capabilities.contextWindow)throw modelFailure('本次资料超过所选模型的容量。','请减少资料或选择容量更大的模型。','budget_exceeded');
-  return value;
+  return modelReasoningOptions(b,value,endpoint);
 }
 function outputLimited(value){return value.choices?.some(c=>c.finish_reason==='length')===true||value.incomplete_details?.reason==='max_output_tokens'||value.response?.incomplete_details?.reason==='max_output_tokens';}
 function evidence(bytes,stream){
@@ -58,7 +59,7 @@ export class ModelRelay{
     if(state.attempt.id!==grant.attemptId||state.operation.status!=='running')throw modelFailure('这项任务当前不能请求模型。','请核对原任务状态。','scope_denied');
     if(path!==(grant.binding.protocol==='responses'?'/responses':'/chat/completions'))throw modelFailure('本次连接方式与选择不一致。');
     const profile=models.acquire(grant.selection,'execution:'+grant.operationId,{tools:true});if(payloadHash(profile.binding)!==payloadHash(grant.binding))throw modelFailure('原模型连接已变化。');
-    const request=providerBody(grant,body),reserved=this.#store.reserve(grant,request);
+    const request=providerBody(grant,body,profile.endpoint),reserved=this.#store.reserve(grant,request);
     if(!reserved.fresh)return {bytes:Buffer.from(reserved.response),contentType:reserved.value.contentType,replayed:true};
     const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)controller.abort();
     let resolveDone;const done=new Promise(resolve=>{resolveDone=resolve;});this.#active.set(reserved.value.id,{controller,done});const chunks=[];let total=0;

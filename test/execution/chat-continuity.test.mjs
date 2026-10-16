@@ -21,14 +21,14 @@ test('continuous chat HTTP persists selected model, context, cursor and usage; e
     server=createWorkspaceServer({repository,chatTransport:transport});const url=await server.listen();
     const post=async(path,input,token=cred.token)=>{const response=await fetch(url+'/api/v1/'+path,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({protocolVersion:PROTOCOL_VERSION,scope,...input})});return {status:response.status,body:await response.json()};};
     const conversation=(await post('ui_chat_create',{requestId:'create-one'})).body;
-    const selection={connectionId:connection.id,model:'fixture-model',effort:'high'},input={conversationId:conversation.id,requestId:'message-one',content:'我的第一个问题',selection,excludedClaimIds:[]};
+    const selection={connectionId:connection.id,model:'fixture-model',effort:'high'},input={conversationId:conversation.id,requestId:'message-one',content:'直接回答，合计不超过900字：我的第一个问题',selection,excludedClaimIds:[]};
     const reply=await post('ui_chat_send',input);assert.equal(reply.status,200);
     const one=await terminal(repository,auth,reply.body.id);assert.equal(one.status,'completed');assert.equal(one.answer,'这是确定性夹具回复');assert.equal(one.costUsd,null);assert.equal(one.usage.inputTokens,70);
-    assert.equal(calls[0].body.model,'fixture-model');assert.equal(calls[0].body.reasoning_effort,'high');assert.equal(calls[0].secret,'synthetic-only-test-key');assert.equal(calls[0].body.stream,true);
+    assert.match(calls[0].body.messages[0].content,/不超过900字/);assert.match(calls[0].body.messages[0].content,/540字左右/);assert.equal(calls[0].body.messages.filter(m=>m.role==='user').at(-1).content,input.content);assert.match(calls[0].body.messages.at(-1).content,/最多使用用户上限六成的可见字符/);assert.equal(one.content,input.content);assert.equal(calls[0].body.model,'fixture-model');assert.equal(calls[0].body.reasoning_effort,'high');assert.equal(calls[0].secret,'synthetic-only-test-key');assert.equal(calls[0].body.stream,true);
     const replay=await post('ui_chat_send',input);assert.equal(replay.body.id,one.id);assert.equal(calls.length,1);
     assert.equal((await post('ui_chat_send',{...input,content:'changed'})).status,409);
     const two=(await post('ui_chat_send',{...input,requestId:'message-two',content:'接着刚才的问题',selection:{...selection,effort:'low'}})).body;
-    await terminal(repository,auth,two.id);assert.equal(calls.length,2);assert.equal(calls[1].body.reasoning_effort,'low');assert.ok(calls[1].body.messages.some(m=>m.role==='assistant'&&m.content===one.answer));
+    await terminal(repository,auth,two.id);assert.equal(calls.length,2);assert.doesNotMatch(calls[1].body.messages[0].content,/本次用户明确要求整份回复/);assert.equal(calls[1].body.reasoning_effort,'low');assert.ok(calls[1].body.messages.some(m=>m.role==='assistant'&&m.content===one.answer));
     const events=(await post('ui_chat_events',{id:one.id,cursor:0})).body;assert.equal(events.status,'completed');assert.equal(events.events.map(e=>e.delta).join(''),one.answer);
     const empty=(await post('ui_chat_events',{id:one.id,cursor:events.sequence})).body;assert.equal(empty.events.length,0);
     const other=repository.createCredential({ownerId:'another',actorId:'human',scope,kind:'ui',capabilities:['read_memory','review_memory','prepare_task']});

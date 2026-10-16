@@ -88,7 +88,7 @@ async def scenario(evidence):
         await connection.run_sync(Base.metadata.create_all)
     await initialize(master_engine)
     org, uid, wid = (uuid.uuid4() for _ in range(3))
-    data = {"organization_id": str(org), "workflow_id": str(wid)}
+    data = {"organization_id": str(org), "user_id": str(uid), "workflow_id": str(wid)}
     async with async_session_factory() as session:
         session.add(Organization(id=org, name="全图免费夹具", slug="graph-" + org.hex))
         await session.flush()
@@ -296,12 +296,31 @@ async def recheck_usage(evidence):
     try:
         await billing.record_execution_usage(eid)
         app = FastAPI()
-        install_api(app, {"organization_id": str(user.organization_id), "workflow_id": str(task.workflow_id)})
+        install_api(app, {"organization_id": str(user.organization_id), "user_id": str(user.id), "workflow_id": str(task.workflow_id)})
         identity = type("Identity", (), {"id": user.id, "organization_id": user.organization_id})()
         app.dependency_overrides[get_current_user] = lambda: identity
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as api:
             route = f"/api/synplex/executions/{eid}/usage"
             assert (await api.get(route)).json()["provenance"] == "provider_receipt"
+            assert (await api.get(route)).json()['verification']['status'] == 'UNKNOWN'
+            async with async_session_factory() as session:
+                feedback = AuditLog(organization_id=user.organization_id,user_id=user.id,
+                    method='EXEC',path=f'/executions/{eid}',status_code=0,
+                    action='verification_feedback',resource_type='execution',resource_id=str(eid),
+                    details={'verdict':'PASS','checks':[{'criterion':'真实文件','status':'PASS','reason':'合成核对夹具，不是业务成绩'}]})
+                session.add(feedback)
+                await session.commit()
+                try:
+                    review = (await api.get(route)).json()['verification']
+                    assert review['executionId'] == str(eid) and review['status'] == 'PASS'
+                    assert len(review['checks']) == 1
+                    # An unowned trace must not expose a review.
+                    feedback.user_id = None
+                    await session.commit()
+                    assert (await api.get(route)).json()['verification']['status'] == 'UNKNOWN'
+                finally:
+                    await session.delete(feedback)
+                    await session.commit()
             identity.id = uuid.uuid4()
             assert (await api.get(route)).status_code == 404
             identity.id, identity.organization_id = user.id, uuid.uuid4()

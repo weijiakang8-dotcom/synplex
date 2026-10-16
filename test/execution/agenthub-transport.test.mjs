@@ -9,7 +9,7 @@ import {WorkspaceRepository} from '../../services/workspace/repository.mjs';
 import {WorkspaceService} from '../../services/workspace/service.mjs';
 import {ExecutionCoordinator} from '../../services/workspace/execution.mjs';
 import {createAgentHubExecutor} from '../../adapters/execution/agenthub.mjs';
-import {engineUsage} from '../../adapters/execution/agenthub-usage.mjs';
+import {engineUsage,engineChecks} from '../../adapters/execution/agenthub-usage.mjs';
 import {sha256} from '../../packages/contracts/validate.mjs';
 import * as context from '../../packages/context/index.mjs';
 import {validatePrice,priceUsage} from '../../packages/execution/accounting.mjs';
@@ -81,6 +81,11 @@ test('AgentHub bridge reuses the authenticated workflow, submits once, verifies 
  const proof={protocol:'synplex.engine-usage/1',executionId:taskId,workflowId,recordedCalls:2,model:'fixture-model',inputTokens:1600,outputTokens:120,provenance:'estimate',coverage:'partial_or_unknown',paidUsd:999};
  assert.deepEqual([engineUsage(legacy,proof).inputTokens,engineUsage(legacy,proof).provenance,engineUsage(legacy,proof).costUsd],[1600,'estimate',null]);
  for(const bad of [{...proof,executionId:randomUUID()},{...proof,model:{}},{...proof,inputTokens:-1},{...proof,recordedCalls:0}])assert.equal(engineUsage(legacy,bad).inputTokens,1500);
+ const review={executionId:taskId,workflowId,status:'PASS',checks:[{criterion:'逐项回答',status:'PASS',reason:'正文有原文依据'}],recordedAt:'2026-10-17T00:00:00Z'},verified={...proof,verification:review};
+ assert.equal(engineChecks(legacy,verified)[0].status,'passed');
+ for(const bad of [null,{...verified,executionId:randomUUID()},{...verified,verification:{...review,status:'FAIL'}},{...verified,verification:{...review,checks:[]}},{...verified,verification:{...review,status:'UNKNOWN'}}])assert.equal(engineChecks(legacy,bad)[0].status,'unknown');
+ const rejected=engineChecks(legacy,{...verified,verification:{...review,status:'FAIL',checks:[{criterion:'逐项回答',status:'FAIL',reason:'少答一项'}]}});
+ assert.equal(rejected[0].status,'failed');assert.match(rejected[0].evidence,/少答一项/);
  assert.deepEqual(repository.artifactFile(auth,scope,done.results[0].id,artifactId).bytes,bytes);
  await execution.start(auth,start);assert.equal(submissions,1);
  // Simulate the private side journal being lost after SQLite bound the remote ID.

@@ -2,6 +2,8 @@ import { ProtocolError, payloadHash, validateWire } from '../contracts/validate.
 
 export const fail = (code, message, nextAction) => { throw new ProtocolError(code, message, nextAction); };
 export const sameScope = (a, b) => payloadHash(a) === payloadHash(b);
+export const current=repo=>repo.getRevision?.()??repo.getState();
+export const contextState=repo=>repo.getContextState?.()??repo.getState();
 export function checkSnapshot(state, initial) {
   if (!sameScope(state.scope, initial.scope) || state.stateRevision !== initial.stateRevision || state.permissionRevision !== initial.permissionRevision)
     fail('stale_context', '读取期间项目或权限已更新。', '读取最新进展后重新准备背景。');
@@ -14,7 +16,7 @@ function checkPage(page, state, seen) {
 }
 export async function occurrences(repo, state) {
   state = structuredClone(state);
-  checkSnapshot(await repo.getState(), state);
+  checkSnapshot({...await current(repo),scope:repo.scope}, state);
   const items = []; let cursor = null; const seen = new Set();
   do {
     const page = await repo.listOccurrences({ cursor, limit: 100 });
@@ -26,13 +28,13 @@ export async function occurrences(repo, state) {
     }
     cursor = page.cursor;
   } while (cursor !== null);
-  checkSnapshot(await repo.getState(), state);
+  checkSnapshot({...await current(repo),scope:repo.scope}, state);
   return items;
 }
 export async function evidencePages(repo, query, state, maxHits = 1000) {
   if (!Number.isSafeInteger(maxHits) || maxHits < 1 || maxHits > 1000) fail('validation_failed', '检索数量需为1到1000。', '提供明确的检索上限。');
   state = structuredClone(state); query = structuredClone(query);
-  checkSnapshot(await repo.getState(), state);
+  checkSnapshot({...await current(repo),scope:repo.scope}, state);
   const items = []; let cursor = null, partial = false; const seen = new Set();
   do {
     // The repository binds cursors to the page limit; keep it constant across pages.
@@ -46,6 +48,6 @@ export async function evidencePages(repo, query, state, maxHits = 1000) {
     items.push(...page.items.slice(0, remaining)); cursor = page.cursor;
     if (page.items.length > remaining || items.length === maxHits && cursor !== null) { partial = true; break; }
   } while (cursor !== null);
-  checkSnapshot(await repo.getState(), state);
+  checkSnapshot({...await current(repo),scope:repo.scope}, state);
   return { items, partial };
 }

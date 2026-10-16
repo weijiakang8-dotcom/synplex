@@ -1,4 +1,5 @@
 import {safeAccountFailure} from './account-security.mjs';
+import {conversationEvidence,taskEvidence} from './chat-evidence.mjs';
 import {safeModelConnectionError} from './model-error.mjs';
 import { ProtocolError, PROTOCOL_VERSION, schema, validateWire, validatePrepare } from '../../packages/contracts/validate.mjs';
 
@@ -52,7 +53,7 @@ export class WorkspaceService {
     validateWire(requests[name], input);
     const repo = await this.repository.forScope(auth, input.scope);
     let response;
-    if (name === 'get_project_state') response = await repo.getState();
+    if (name === 'get_project_state') response = await (repo.getSummaryState?.()??repo.getState());
     if (name === 'find_evidence') {
       const page = await repo.queryEvidence({ query: input.query, limit: input.limit, cursor: null,
         includeHistory: input.includeHistory, occurrenceIds: null });
@@ -67,7 +68,8 @@ export class WorkspaceService {
       else {
         if (typeof this.modules.context?.prepareContext !== 'function') unavailable('项目背景整理');
         const chatReference=input.conversationId?this.repository.chat(auth,input.scope).snapshot(input.conversationId):null;
-        const packet = await this.modules.context.prepareContext(repo, input, { reservedTokens: 512, estimatorVersion: 'utf8-bytes-conservative/1',chatReference });
+        const chatEvidence=conversationEvidence(this.repository,auth,input.scope,chatReference);
+        const packet = await this.modules.context.prepareContext(repo, input, { reservedTokens: 512, estimatorVersion: 'utf8-bytes-conservative/1',chatReference,chatEvidence });
         response = this.repository.registerPrepared(auth, input, packet).value;
       }
     }
@@ -85,14 +87,16 @@ export class WorkspaceService {
     const {input,binding,taskInputs,chatReference}=this.repository.stepPreparation(auth,request);
     if(typeof this.modules.context?.prepareContext!=='function')unavailable('项目背景整理');
     const repo=await this.repository.forScope(auth,input.scope);
-    const packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs,chatReference});
+    const chatEvidence=[...taskEvidence(this.repository,auth,input.scope,taskInputs),...conversationEvidence(this.repository,auth,input.scope,chatReference)];
+    const packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs,chatReference,chatEvidence});
     return this.repository.registerPrepared(auth,input,packet,binding).value;
   }
   async prepareFollowup(auth,request){
     const prior=this.repository.priorFollowupPreparation(auth,request);if(prior)return {...prior,conversation:this.repository.taskConversation(auth,request.scope,prior.run.id)};
     const {input,binding,taskInputs,chatReference}=this.repository.followupPreparation(auth,request);
     if(typeof this.modules.context?.prepareContext!=='function')unavailable('项目背景整理');
-    const repo=await this.repository.forScope(auth,input.scope),packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs,chatReference});
+    const repo=await this.repository.forScope(auth,input.scope),chatEvidence=[...taskEvidence(this.repository,auth,input.scope,taskInputs),...conversationEvidence(this.repository,auth,input.scope,chatReference)];
+    const packet=await this.modules.context.prepareContext(repo,input,{reservedTokens:512,estimatorVersion:'utf8-bytes-conservative/1',taskInputs,chatReference,chatEvidence});
     const result=this.repository.registerPrepared(auth,input,packet,null,{request,binding}).value;
     return {...result,conversation:this.repository.taskConversation(auth,request.scope,result.run.id)};
   }

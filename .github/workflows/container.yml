@@ -31,7 +31,7 @@ jobs:
         run: bash scripts/integration/container-check.sh
   full-container:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,7 +39,19 @@ jobs:
           node-version: '26.11.1'
       - name: Build independent execution image
         run: docker build -f deploy/Dockerfile.full -t synplex-full:ci .
+      - name: Worker output allowance and budget regression without model calls
+        run: docker run --rm --entrypoint /opt/synplex-python/bin/python synplex-full:ci -B /app/scripts/integration/worker-output-check.py
       - name: Full stack, public landing and protected workspace
         run: bash scripts/integration/container-check.sh
         env:
           SYNPLEX_CONTAINER_FULL: '1'
+      - name: Prepare the evaluated predecessor for migration regression
+        env:
+          PREDECESSOR: d721f4eb4fcd788426115aeb9e78334be87c42ef
+        run: |
+          git fetch --depth=1 origin "$PREDECESSOR"
+          mkdir "$RUNNER_TEMP/synplex-predecessor"
+          git archive "$PREDECESSOR" | tar -x -C "$RUNNER_TEMP/synplex-predecessor"
+          docker build -f "$RUNNER_TEMP/synplex-predecessor/deploy/Dockerfile.full" -t synplex-full:predecessor-ci "$RUNNER_TEMP/synplex-predecessor"
+      - name: Exact migration, real predecessor restart and new-write preservation
+        run: bash scripts/integration/container-migration-check.sh "$RUNNER_TEMP/synplex-predecessor" synplex-full:predecessor-ci synplex-full:ci

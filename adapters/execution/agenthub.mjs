@@ -2,7 +2,7 @@ import {readFileSync,lstatSync,mkdirSync,writeFileSync,renameSync,existsSync} fr
 import {join,isAbsolute} from 'node:path';
 import {payloadHash,sha256,ProtocolError,validateWire} from '../../packages/contracts/validate.mjs';
 import {executionContextView} from './context-view.mjs';
-import {engineUsage} from './agenthub-usage.mjs';
+import {engineUsage,engineChecks} from './agenthub-usage.mjs';
 import {inputDeliveryReader} from './agenthub-input.mjs';
 import {operationApproval} from './agenthub-approval.mjs';
 import {agentHubActivity} from './agenthub-activity.mjs';
@@ -74,7 +74,7 @@ export function createAgentHubExecutor({endpoint,tokenFile,workflowId,dataDir,po
   // acknowledged a stop. Never convert that into a verified CANCELLED receipt.
   const delivery=task.checkpoint_data?.delivery,blocked=Array.isArray(delivery?.blockers)&&delivery.blockers.length>0;
   const usageEvidence=await readUsage(taskId,signal);
-  const receipt={status:cancelled&&workerReturned?'cancelled':task.status==='completed'&&!blocked?'succeeded':'failed',result:validateWire('ResultInput',{eventId:'agenthub:'+taskId,attemptId,provider:'synplex-agenthub',summary:taskSummary(task,cancelled),artifacts:files.map(f=>f.artifact),checks:[],usage:engineUsage(task,usageEvidence),supersedesResultId:null,occurredAt:task.completed_at??null})};
+  const receipt={status:cancelled&&workerReturned?'cancelled':task.status==='completed'&&!blocked?'succeeded':'failed',result:validateWire('ResultInput',{eventId:'agenthub:'+taskId,attemptId,provider:'synplex-agenthub',summary:taskSummary(task,cancelled),artifacts:files.map(f=>f.artifact),checks:engineChecks(task,usageEvidence),usage:engineUsage(task,usageEvidence),supersedesResultId:null,occurredAt:task.completed_at??null})};
   return {...receipt,files:files.map(({artifactId,bytes})=>({artifactId,bytes}))};
  }
  async function lookup({operationId,attemptId,remoteSubmission}){

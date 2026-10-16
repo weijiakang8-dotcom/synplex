@@ -40,11 +40,11 @@ jobs:
           PYCODE
       - name: Require the administrator-installed Synplex release entry
         run: |
-          if ! test -x /usr/local/sbin/deploy-synplex; then
-            echo '::error::The server still has the old AgentHub deployment entry. An administrator must install deploy/deploy-synplex and configure HTTPS access before switching. The old site is unchanged.'
+          if ! test -x /usr/local/sbin/deploy-synplex-full; then
+            echo '::error::An administrator must install the reviewed deploy/deploy-synplex-full entry for the full workspace. The current site is unchanged.'
             exit 42
           fi
       - name: Deploy through the restricted production entry
         env:
           TARGET_SHA: ${{ inputs.sha }}
-        run: sudo -n /usr/local/sbin/deploy-synplex "$TARGET_SHA"
+        run: sudo -n /usr/local/sbin/deploy-synplex-full "$TARGET_SHA"

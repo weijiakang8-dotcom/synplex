@@ -296,7 +296,7 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         const sourceCoverage=repository.sourceCoverage(auth,input.scope,sources.map(s=>s.id));
         const executions=repository.recent(auth,input.scope,'execution_job',100).map(job=>repository.executionState(auth,input.scope,job.id));
         const latest=runs.at(-1),latestWork=latest?{run:latest,packet:repository.read(auth,input.scope,'context',latest.contextPacketId),conversation:repository.taskConversation(auth,input.scope,latest.id)}:null;
-        const resultReviews=repository.list(auth,input.scope,'result_review');
+        const resultReviews=repository.list(auth,input.scope,'result_review'),lessonCandidates=repository.pendingLessons(auth,input.scope);
         const resultRequirements=Object.fromEntries(results.map(result=>{const attempt=repository.read(auth,input.scope,'attempt',result.attemptId),run=attempt&&repository.read(auth,input.scope,'run',attempt.runId),packet=run&&repository.read(auth,input.scope,'context',run.contextPacketId);return [result.id,packet?{runId:run.id,goal:packet.goal,acceptanceCriteria:packet.acceptanceCriteria}:null];}));
         const conflicts=repository.conflictDetails(auth,input.scope);
         const usage=repository.usageLedger(auth,input.scope),budget=repository.budgetStatus(auth,input.scope);
@@ -304,7 +304,7 @@ export function createWorkspaceServer({repository,modules={},publicDir=null,allo
         const modelCalls=Object.fromEntries(executions.map(x=>[x.operation.id,modelRelay?.calls(auth,input.scope,x.operation.id)??[]]));
         const taskSteps=repository.recent(auth,input.scope,'task_step',100);
         const sourceMetadata=sources.map(s=>repository.sourceMetadata(auth,input.scope,s.id));
-        return send(res,200,{pendingCursor:pendingPage.cursor,pendingTotal:pendingPage.total,sourceCursor:materialPage.cursor,importStatus:repository.importStatus(auth,input.scope),state,claims,sources,sourceCoverage,events,runs,results,totals,modelCalls,artifactFiles,resultReviews,resultRequirements,executions,latestWork,conflicts,usage,budget,taskPlans,taskSteps,sourceMetadata,sourcePreviewPages:true,materialQuestions:true,taskFollowups:true,taskResultAdoption:true,claimVersionActions:true,materialBriefs:true,recordJourney:true,resultVersionActions:true,artifactPreviews:true,noteExports:true,projectExpressions:true,projectExpressionVersions:true,executionStatus:repository.executionStatus(auth,input.scope),diagnostics:diagnosticStatus(diagnostics)});
+        return send(res,200,{curations:repository.curationHistory(auth,input.scope),candidateSelection:pendingPage.selection,pendingCursor:pendingPage.cursor,pendingTotal:pendingPage.total,sourceCursor:materialPage.cursor,importStatus:repository.importStatus(auth,input.scope),state,claims,sources,sourceCoverage,events,runs,results,totals,modelCalls,artifactFiles,resultReviews,lessonCandidates,resultRequirements,executions,latestWork,conflicts,usage,budget,taskPlans,taskSteps,sourceMetadata,sourcePreviewPages:true,materialQuestions:true,taskFollowups:true,taskResultAdoption:true,claimVersionActions:true,materialBriefs:true,recordJourney:true,resultVersionActions:true,artifactPreviews:true,noteExports:true,projectExpressions:true,projectExpressionVersions:true,executionStatus:repository.executionStatus(auth,input.scope),diagnostics:diagnosticStatus(diagnostics)});
       }
       if(path==='/api/v1/ui_reconcile_usage'){
         if(auth.kind!=='ui')throw denied();

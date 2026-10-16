@@ -1,15 +1,12 @@
-import {addSourceEvidence,completeReferenceIndex} from './retrieval.mjs';
+import {addSourceEvidence,addConversationEvidence,completeReferenceIndex,retrievalTerms} from './retrieval.mjs';
 import {addRecordHistory} from './record-history.mjs';
 import { randomUUID } from 'node:crypto';
 import { PROTOCOL_VERSION, ProtocolError, validatePrepare, validateWire, payloadHash } from '../contracts/validate.mjs';
-import { occurrences, evidencePages, checkSnapshot, sameScope } from './repository-read.mjs';
+import { occurrences, evidencePages, checkSnapshot, sameScope,current,contextState } from './repository-read.mjs';
 
 const fail=(code,message,nextAction)=>{throw new ProtocolError(code,message,nextAction);};
 const unique=items=>[...new Map(items.map(item=>[payloadHash(item),item])).values()];
-const words=text=>[...new Set([
-  ...(text.match(/[A-Za-z][\w.-]{1,40}/g)??[]),
-  ...(text.match(/[\p{Script=Han}]+/gu)??[]).flatMap(run=>Array.from(run).slice(0,-1).map((_,i)=>Array.from(run).slice(i,i+2).join('')))
-].map(x=>x.toLowerCase()))].slice(0,64);
+const words=retrievalTerms;
 // Conservative upper bound, not a provider tokenizer or observed model usage.
 export function estimatePacketTokens(packet) {
   const {contentHash,budget,...content}=packet;
@@ -17,12 +14,21 @@ export function estimatePacketTokens(packet) {
 }
 
 function optionalInputs(options){return {...(options.taskInputs?.length?{taskInputs:options.taskInputs}:{}),...(options.chatReference?{chatReference:options.chatReference}:{})};}
+function addOptionalCandidates(packet,candidates,reserved,limit){
+ let omitted=0;
+ for(const candidate of candidates){
+  if(packet.candidates.some(c=>c.id===candidate.id))continue;
+  const prior=packet.evidence;packet.candidates.push(candidate);packet.evidence=unique([...prior,...candidate.evidence]);
+  if(estimatePacketTokens(packet)+reserved+2000>limit){packet.candidates.pop();packet.evidence=prior;omitted++;}
+ }
+ return omitted;
+}
 
 export async function prepareContext(repo,input,options) {
   validatePrepare(input);input=structuredClone(input);options=structuredClone(options);
   if(!sameScope(repo.scope,input.scope)||!Number.isSafeInteger(options?.reservedTokens)||options.reservedTokens<0||
       options.estimatorVersion!=='utf8-bytes-conservative/1')fail('validation_failed','项目范围或背景预算无效。','使用当前项目与支持的预算配置。');
-  const state=await repo.getState();
+  const state=await contextState(repo);
   if(state.stateRevision!==input.expectedStateRevision)fail('stale_context','项目已更新。','读取最新进展后重新准备。');
   const all=await occurrences(repo,state),selected=new Set(input.selectedOccurrenceIds);
   if([...selected].some(id=>!all.some(o=>o.id===id)))fail('scope_denied','选中的资料不属于当前项目。','重新选择当前项目的资料。');
@@ -38,7 +44,7 @@ export async function prepareContext(repo,input,options) {
   const packet={id:randomUUID(),protocolVersion:PROTOCOL_VERSION,scope:structuredClone(repo.scope),stateRevision:state.stateRevision,
     permissionRevision:state.permissionRevision,goal:input.goal,constraints:input.constraints,acceptanceCriteria:input.acceptanceCriteria,
     facts:[...state.facts.filter(relevant),...state.decisions],failures:[...state.failures],lessons:state.lessons.filter(relevant),
-    candidates:[],conflicts:[...conflicts],unknowns:[],evidence:[],selectedOccurrenceIds:input.selectedOccurrenceIds,
+    candidates:[],conflicts:[...conflicts],unknowns:state.unknowns.filter(x=>x.startsWith('资料筛选：')),evidence:[],selectedOccurrenceIds:input.selectedOccurrenceIds,
     ...(input.executionOptions?{executionOptions:input.executionOptions}:{}),
     ...optionalInputs(options),
     coverage:conflicts.length?'needs_input':'complete',budget:{maxInputTokens:input.maxInputTokens,reservedTokens:options.reservedTokens,
@@ -46,20 +52,34 @@ export async function prepareContext(repo,input,options) {
   packet.evidence=unique([...packet.facts,...packet.failures,...packet.lessons].flatMap(c=>c.evidence));
   const fits=()=>estimatePacketTokens(packet)+options.reservedTokens<=input.maxInputTokens;
   if(!fits())fail('budget_exceeded','完整目标、验收及已确认背景超过这次预算。','缩小选中的资料范围或增加背景预算，原要求没有被截断。');
+  // A packet is reused by planning, tools and verification. Filling the entire
+  // input allowance with optional fragments can exhaust the worker before its
+  // first tool call. Preserve mandatory material, reserve execution headroom,
+  // and explicitly disclose whole optional records not carried into this run.
+  const optionalLimit=input.mode==='platform_owned'?Math.min(input.maxInputTokens,24000):input.maxInputTokens;
+  const optionalFits=()=>estimatePacketTokens(packet)+options.reservedTokens<=optionalLimit;
+  if(optionalLimit<input.maxInputTokens)packet.unknowns.push('为规划、工具调用和核对保留容量，可选背景按较小范围选取；完整目标、约束、已确认决定、失败及选定对话不截断，原资料仍可查找。');
   if(excluded){packet.unknowns.push(`已按这次目标筛选背景，${excluded}条未匹配的确认信息或经验未加入；原记录未删除。关键词筛选可能漏掉相关内容，可手动选择资料。`);packet.coverage=packet.coverage==='needs_input'?'needs_input':'partial';}
   const unmatched=state.pending.filter(c=>inScope(c)&&!relevant(c)).length;
   if(unmatched){packet.unknowns.push(`${unmatched}条未匹配的待核对记录未加入，仍保留在资料和历史中。`);packet.coverage=packet.coverage==='needs_input'?'needs_input':'partial';}
   const candidates=state.pending.filter(c=>inScope(c)&&(selected.size||!terms.length||score(c)>0)).sort((a,b)=>{
-    return score(b)-score(a)||a.recordedAt.localeCompare(b.recordedAt)||a.id.localeCompare(b.id);
+    // Individually written/organized events precede raw rule fragments. They
+    // remain unconfirmed; this is relevance ordering, not promotion to facts.
+    const raw=c=>Number((c.condition??'').startsWith('仅为原文规则候选'));
+    return raw(a)-raw(b)||score(b)-score(a)||a.recordedAt.localeCompare(b.recordedAt)||a.id.localeCompare(b.id);
   });
-  const rawSpans=await addSourceEvidence(repo,packet,input.goal,[...selected],options.reservedTokens,estimatePacketTokens);
+  const organized=candidates.filter(c=>!(c.condition??'').startsWith('仅为原文规则候选'));
+  // Unconfirmed summaries must not consume the entire evidence allowance.
+  // Retrieve original passages first; then use remaining room for summaries.
+  const rawSpans=await addSourceEvidence(repo,packet,input.goal,[...selected],options.reservedTokens,estimatePacketTokens,optionalLimit);
+  // The new goal takes precedence over quotations retrieved for an older chat.
+  // Keep the selected conversation intact, then carry its remaining original
+  // citations within capacity; omissions are disclosed rather than deleted.
+  const chatSpans=addConversationEvidence(packet,options.chatEvidence??[],selected,options.reservedTokens,estimatePacketTokens,optionalLimit);
+  addOptionalCandidates(packet,organized,options.reservedTokens,optionalLimit);
   // Reserve room for explicit coverage notices before considering optional material.
   if(candidates.length)packet.unknowns.push('待核对内容仅为原文线索，不代表已确认事实或执行授权。');
-  let omitted=0;
-  for(const candidate of candidates){
-    const prior=packet.evidence;packet.candidates.push(candidate);packet.evidence=unique([...prior,...candidate.evidence]);
-    if(!fits()||estimatePacketTokens(packet)+options.reservedTokens+2000>input.maxInputTokens){packet.candidates.pop();packet.evidence=prior;omitted++;}
-  }
+  const omitted=addOptionalCandidates(packet,candidates,options.reservedTokens,optionalLimit);
   // Historical evidence preserves rejected/obsolete decisions without making them current facts.
   let historical=0,limited=false;const historicalSpans=[];
   for(const query of terms.slice(0,8)){
@@ -70,7 +90,7 @@ export async function prepareContext(repo,input,options) {
         const note=`历史线索 ${hit.claim.id}：${hit.claim.reviewStatus}/${hit.claim.lifecycle}，不能当作当前结论。`;
         const prior=packet.evidence;packet.evidence=unique([...prior,hit.span]);
         const added=!packet.unknowns.includes(note);if(added)packet.unknowns.push(note);
-        if(!fits()){packet.evidence=prior;if(added)packet.unknowns.pop();limited=true;}else{historical++;historicalSpans.push(hit.span);}
+        if(!optionalFits()){packet.evidence=prior;if(added)packet.unknowns.pop();limited=true;}else{historical++;historicalSpans.push(hit.span);}
       }
     }
   }
@@ -86,13 +106,13 @@ export async function prepareContext(repo,input,options) {
     packet.coverage=packet.coverage==='needs_input'?'needs_input':'partial';
     while(!fits()&&packet.candidates.length){
       packet.candidates.pop();
-      packet.evidence=unique([...packet.facts,...packet.failures,...packet.lessons,...packet.candidates].flatMap(c=>c.evidence).concat(rawSpans,historicalSpans));
+      packet.evidence=unique([...packet.facts,...packet.failures,...packet.lessons,...packet.candidates].flatMap(c=>c.evidence).concat(chatSpans,rawSpans,historicalSpans));
     }
   }
-  if(options.includeRecordHistory!==false)await addRecordHistory(repo,packet,fits);
+  if(options.includeRecordHistory!==false)await addRecordHistory(repo,packet,optionalFits);
   packet.budget.estimatedTokens=estimatePacketTokens(packet);
   if(!fits())fail('budget_exceeded','必要背景和缺口说明超过预算。','缩小资料范围或增加背景预算，完整目标与验收仍保留。');
-  checkSnapshot(await repo.getState(),state);
+  checkSnapshot({...await current(repo),scope:repo.scope},state);
   packet.contentHash=payloadHash(packet);
   return validateWire('ContextPacket',packet);
 }

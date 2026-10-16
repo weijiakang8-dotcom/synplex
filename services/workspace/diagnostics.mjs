@@ -8,9 +8,10 @@ import {payloadHash} from '../../packages/contracts/validate.mjs';
 // source text, filesystem paths or the caller's raw correlation identifiers.
 const routes=new Set(('ui_chat_create ui_chat_lookup ui_chat_list ui_chat_history ui_chat_events ui_chat_send ui_chat_stop ui_chat_review ui_models ui_save_model ui_change_model ui_discover_models ui_probe_model ui_bootstrap ui_pair ui_logout ui_history ui_launch ui_select_project ui_create_project ui_extension ui_verify_artifact import_source get_import_result authorize_review review_claim '+
  'get_project_state find_evidence prepare_task record_result propose_lesson get_operation ui_find_evidence ui_task_detail '+
- 'ui_result_versions ui_adopt_task_result ui_claim_detail ui_compare_claims ui_source_history ui_task_plan ui_source_preview ui_source_brief ui_artifact_preview artifact_file source_file ui_note_preview ui_note_file ui_project_preview ui_project_file ui_expression_versions ui_expression_version ui_approve_expression ui_stop_expression ui_expression_link '+
+ 'ui_pending_page ui_materials_page ui_import_status ui_project_revision ui_obsidian_notes ui_source_preview_page ui_result_versions ui_adopt_task_result ui_claim_detail ui_compare_claims ui_source_history ui_task_plan ui_source_preview ui_source_brief ui_artifact_preview artifact_file source_file ui_note_preview ui_note_file ui_project_preview ui_project_file ui_expression_versions ui_expression_version ui_approve_expression ui_stop_expression ui_expression_link '+
  'ui_reconcile_usage ui_resolve_conflict ui_answer_question ui_reconnect_input authorize_execution execute_task execution_state reconcile_execution cancel_execution '+
  'ui_edit_claim ui_restore_claim ui_source_metadata ui_review_result ui_result_lesson ui_create_task_plan ui_prepare_step ui_prepare_followup ui_start_plan_step ui_task_routes ui_select_task_route').split(' '));
+for(const name of ['ui_curate_start','ui_curate_state'])routes.add(name);
 const codes=new Set(['validation_failed','scope_denied','conflict','stale_context','budget_exceeded','capability_unavailable','unsupported_format','partial_parse','writeback_pending']);
 const hash=value=>value===undefined||value===null?null:payloadHash(value).slice(0,24);
 const routeName=url=>{const name=String(url).split('?')[0].replace(/^\/api\/v1\//,'');return routes.has(name)?name:'other';};

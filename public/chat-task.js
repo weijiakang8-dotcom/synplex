@@ -137,6 +137,8 @@ export function createChatTask({app,request,getScope,getCapabilities,render,stor
   });
   return {
     capture:formState,
+    selection(){formState();return structuredClone(state().selection);},
+    prepareQuestion(content){formState();const s=state();if(s.sending||s.pending)throw Error('请先核对当前消息，原内容会保留。');rememberDraft(s);s.mode='chat';s.conversationId=null;s.createId=null;s.items=[];s.content=content;s.cursor=null;persist();},
     selectMode(mode){if(!['chat','execute'].includes(mode))return;formState();state().mode=mode;persist();},
     refreshModels(){if(app.querySelector('#task-chat-panel')&&state().mode==='chat'){formState();stopPolling();return hydrate(generation);}},
     wrapTask(html,view){

@@ -1,6 +1,7 @@
 import {connectNoteLibrary,reopenNoteLibrary,disconnectNoteLibrary,noteLibrary,scanNoteLibrary} from './obsidian-library.js';
 import {noteIdentity,noteTitle,OBSIDIAN_SOURCE} from './obsidian-notes.js';
 import {errorText} from './user-copy.js';
+import {readNoteBytes} from './note-reader.js';
 let activeUpload=false;
 globalThis.window?.addEventListener('beforeunload',event=>{if(activeUpload){event.preventDefault();event.returnValue='';}});
 const protocolVersion='synplex.workspace/1.0.0';
@@ -23,7 +24,7 @@ async function prepareSelected(items,vault,boxes){
  if(!selected.length)throw Error('请先勾选要导入的笔记。');
  const prepared=[];
  for(const item of selected){
-  const identity=noteIdentity(vault,item.path),bytes=await item.file.arrayBuffer();
+  const identity=noteIdentity(vault,item.path),bytes=await readNoteBytes(item.file);
   let text;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw Error('这篇笔记无法读取：'+item.path+'。请先在笔记软件中另存为普通文字。');}
   prepared.push({...item,identity,bytes,title:noteTitle(item.path,text),sha256:await hash(bytes)});
  }
@@ -95,10 +96,16 @@ export function bindObsidianImport(c){
    try{
     if(!same(scope,c.getScope()))throw Error('项目已切换，请在当前项目重新打开导入。');
     if(!selected.size)throw Error('请先勾选要导入的笔记。');
-    const index=await c.request('ui_obsidian_notes',{scope}),counts={imported:0,queued:0,unchanged:0,locked:0,needs_review:0};let processed=0;
-    const summary=()=>`已处理 ${processed}/${selected.size} 篇：整理完成 ${counts.imported}，后台整理 ${counts.queued}，未变化 ${counts.unchanged}，已锁定 ${counts.locked}，需核对 ${counts.needs_review}。`;
-    for(const [i,raw] of items.entries()){if(!selected.has(String(i)))continue;const [item]=await prepareSelected([raw],name.value,new Set(['0']));status.textContent=summary()+'正在保存：'+item.path;counts[await importOne(c,item,scope,index,status)]++;processed++;status.textContent=summary();if(processed%10===0)await c.onImported(scope);}
-    status.textContent=`已保存 ${counts.imported+counts.queued} 篇，后台继续整理 ${counts.queued} 篇，未变化 ${counts.unchanged} 篇，已锁定 ${counts.locked} 篇，需核对 ${counts.needs_review} 篇。可以关闭本窗口继续工作，处理进度在“资料”查看。整理出的记录仍需你核对。`;await c.onImported(scope);
+    const index=await c.request('ui_obsidian_notes',{scope}),counts={imported:0,queued:0,unchanged:0,locked:0,needs_review:0,unreadable:0},unread=[];let processed=0;
+    const summary=()=>`已处理 ${processed}/${selected.size} 篇：整理完成 ${counts.imported}，后台整理 ${counts.queued}，未变化 ${counts.unchanged}，已锁定 ${counts.locked}，需核对 ${counts.needs_review}，暂时读不到 ${counts.unreadable}。`;
+    for(const [i,raw] of items.entries()){
+     if(!selected.has(String(i)))continue;status.textContent=summary()+'正在读取：'+raw.path;
+     let item;
+     try{[item]=await prepareSelected([raw],name.value,new Set(['0']));}
+     catch(e){if(e.code!=='note_read_unavailable')throw e;counts.unreadable++;processed++;unread.push(raw.path);error.textContent='以下笔记暂时读不到，已继续处理其他笔记：'+unread.join('、')+'。请先在电脑上下载原文件，再重新选择导入；已保存内容不会重复新增。';continue;}
+     status.textContent=summary()+'正在保存：'+item.path;counts[await importOne(c,item,scope,index,status)]++;processed++;status.textContent=summary();if(processed%10===0)await c.onImported(scope);
+    }
+    status.textContent=`已保存 ${counts.imported+counts.queued} 篇，后台继续整理 ${counts.queued} 篇，未变化 ${counts.unchanged} 篇，已锁定 ${counts.locked} 篇，需核对 ${counts.needs_review} 篇，暂时读不到 ${counts.unreadable} 篇。可以关闭本窗口继续工作，处理进度在“资料”查看。整理出的记录仍需你核对。`;await c.onImported(scope);
    }catch(e){error.textContent=errorText(e);}
    finally{activeUpload=false;await c.onImported(scope);running=false;controls.forEach(x=>x.disabled=false);connection();draw();}
   };

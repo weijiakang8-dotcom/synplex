@@ -26,3 +26,9 @@ export function executionActivity(events,status,esc,date,expanded=false){
  const recent=events.slice(-3);
  return `<div class="execution-steps" aria-live="polite">${recent.map((event,index)=>`<p>${esc(activityText(event,index===recent.length-1?status:'unknown'))}</p>`).join('')}</div><details data-ai-role="execution_activity" ${expanded?'open':''}><summary data-ai-action="view_execution_steps" data-tip="查看最近同步的执行步骤，不会重新执行任务">步骤记录</summary><p class="subtle">最多显示最近同步的100条。步骤结束后，成果仍需检查。</p><ol>${events.map(event=>`<li>记录于 <time datetime="${esc(event.at)}">${esc(date(event.at))}</time> · ${esc(activityText(event,'unknown'))}</li>`).join('')}</ol></details>`;
 }
+export function resultChecks(checks,esc){
+ if(!checks?.length)return '';
+ const failed=checks.some(c=>c.status==='failed'),unknown=checks.some(c=>['unknown','not_run'].includes(c.status));
+ const label=failed?'自动核对未通过':unknown?'自动核对尚无有效结论':'自动核对通过，仍需你验收';
+ return `<details data-ai-role="result_checks"><summary>${label}</summary><p class="subtle">执行结束、自动核对和你的验收分别记录。已有文件保留，不会自动重做。</p><ul>${checks.map(c=>`<li>${esc(c.evidence)}</li>`).join('')}</ul></details>`;
+}

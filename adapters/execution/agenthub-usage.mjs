@@ -18,3 +18,14 @@ export function engineUsage(task,evidence=null){
     inputTokens:complete?inputTokens:null,outputTokens:complete?outputTokens:null,cachedInputTokens:null,
     costUsd:null,pricingRevision:null,provenance:complete?trusted?evidence.provenance:'estimate':'unknown'};
 }
+
+export function engineChecks(task,evidence){
+ const review=evidence?.verification,recordedAt=review?.recordedAt;
+ const scoped=evidence?.protocol==='synplex.engine-usage/1'&&evidence.executionId===task.id&&evidence.workflowId===task.workflow_id&&review?.executionId===task.id&&review.workflowId===task.workflow_id;
+ const checks=review?.checks,valid=scoped&&['PASS','FAIL'].includes(review.status)&&Array.isArray(checks)&&checks.length>0&&checks.length<=12&&checks.every(c=>c&&['PASS','FAIL'].includes(c.status)&&['criterion','reason'].every(k=>typeof c[k]==='string'&&c[k].length>0&&Array.from(c[k]).length<=200));
+ const dated=typeof recordedAt==='string'&&Number.isFinite(Date.parse(recordedAt));
+ const consistent=valid&&dated&&(review.status==='PASS')===checks.every(c=>c.status==='PASS');
+ const common={method:'自动核对正文与要求',artifactIds:[],performedBy:'synplex-agenthub:semantic-verifier',recordedAt:dated?new Date(recordedAt).toISOString():new Date().toISOString()};
+ if(!consistent)return [{...common,id:'agenthub:'+task.id+':verification',status:'unknown',evidence:'尚无有效的自动核对结论。文件和原执行记录已保存，请逐项检查成果；这不代表人工验收通过。'}];
+ return checks.map((c,i)=>({...common,id:'agenthub:'+task.id+':verification:'+i,status:c.status==='PASS'?'passed':'failed',evidence:c.criterion+'：'+c.reason}));
+}

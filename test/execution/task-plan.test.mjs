@@ -12,6 +12,8 @@ import {validateTaskPlan} from '../../packages/execution/task-plan.mjs';
 import {PROTOCOL_VERSION,sha256} from '../../packages/contracts/validate.mjs';
 import {compareTaskRoutes} from '../../packages/execution/task-routes.mjs';
 import {validatePrice} from '../../packages/execution/accounting.mjs';
+import {importSource} from '../../packages/ingestion/index.mjs';
+import {taskEvidence} from '../../services/workspace/chat-evidence.mjs';
 
 const scope={projectId:'step-test',versionId:'v2',branchId:null};
 const usage={observationScope:'host_unavailable',provider:null,model:null,inputTokens:null,outputTokens:null,cachedInputTokens:null,costUsd:null,pricingRevision:null,provenance:'unknown'};
@@ -21,7 +23,7 @@ async function setup(t){
  const credential=repository.createCredential({ownerId:'owner',actorId:'ui',scope,kind:'ui',capabilities:['read_memory','write_memory','review_memory','prepare_task','execute','record_result']});
  let auth=repository.authenticate(credential.token),calls=0,inputs=[],unknown=false,failNext=false;
  const choices=[{id:'small',label:'测试快速型号',provider:'fixture',efforts:['low','high']},{id:'large',label:'测试深入型号',provider:'fixture',efforts:['low','max']}];
- const adapters={codex:{mode:'delegated',fileInputs:true,selectionChoices:choices,validateSelection(options){if(options)assert.ok(choices.some(c=>c.id===options.model&&c.efforts.includes(options.effort)));},async execute(input){calls++;inputs.push(input);if(unknown)return new Promise(()=>{});const bytes=Buffer.from(input.packet.taskInputs?.some(x=>x.role==='previous_version')?'修订后完整报告':'已核对的成果内容');const artifact={id:'file',name:'report.md',uri:'synplex-artifact:file',sha256:sha256(bytes),byteLength:bytes.length,mediaType:'text/markdown',verification:'reported'},status=failNext?'failed':'succeeded';failNext=false;return {status,result:{eventId:input.operationId,attemptId:input.attemptId,provider:'isolated-test',summary:status==='failed'?'故意失败的隔离夹具，已有文件保留。':'已交付成果，请核对。',artifacts:[artifact],checks:[],usage,supersedesResultId:null,occurredAt:null},files:[{artifactId:'file',bytes}]};}}};
+ const adapters={codex:{mode:'delegated',fileInputs:true,selectionChoices:choices,validateSelection(options){if(options)assert.ok(choices.some(c=>c.id===options.model&&c.efforts.includes(options.effort)));},async execute(input){calls++;inputs.push(input);if(unknown)return new Promise(()=>{});const bytes=Buffer.from(input.packet.taskInputs?.some(x=>x.role==='previous_version')?'修订后完整报告':'已核对的成果内容');const artifact={id:'file',name:'report.md',uri:'synplex-artifact:file',sha256:sha256(bytes),byteLength:bytes.length,mediaType:'text/markdown',verification:'reported'},status=failNext?'failed':'succeeded';failNext=false;return {status,result:{eventId:input.operationId,attemptId:input.attemptId,provider:'isolated-test',summary:status==='failed'?'故意失败的隔离夹具，已有文件保留。':'已交付成果，请核对。'+(input.packet.sourceReferences??[]).map(r=>'《'+r.title+'》').join(''),artifacts:[artifact],checks:[],usage,supersedesResultId:null,occurredAt:null},files:[{artifactId:'file',bytes}]};}}};
  let execution=new ExecutionCoordinator({repository,adapters,timeoutMs:100,leaseMs:60}),app=createWorkspaceServer({repository,modules:{context},execution}),url=await app.listen();
  const post=async(path,body)=>{const response=await fetch(url+'/api/v1/'+path,{method:'POST',headers:{Authorization:'Bearer '+credential.token,'Content-Type':'application/json'},body:JSON.stringify({protocolVersion:PROTOCOL_VERSION,scope,...body})});return {status:response.status,value:await response.json()};};
  const meta=()=>({requestId:randomUUID(),expectedStateRevision:repository.state(auth,scope).stateRevision});
@@ -170,4 +172,23 @@ test('重新选用真实历史成果不执行或造版本，重新核对后只�
  const agent=h.repository.createCredential({ownerId:'owner',actorId:'host',scope,kind:'agent',capabilities:['read_memory']});assert.throws(()=>h.repository.adoptTaskResult(h.repository.authenticate(agent.token),{protocolVersion:PROTOCOL_VERSION,scope,...request}),e=>e.code==='scope_denied');
  const next=await h.post('ui_prepare_step',{...h.meta(),planId:plan.id,nodeId:'read',instruction:'在当前选用成果上继续修改',baseResultId:revised.id});assert.equal(next.status,200);assert.equal(next.value.packet.taskInputs.at(-1).resultId,revised.id);
  current=h.repository.taskPlan(h.auth,scope,plan.id);assert.equal(current.nodes[0].status,'prepared');assert.equal(current.nodes[0].resultSelection,null,'新准备轮不被旧选用覆盖');assert.equal(current.nodes[0].generation,3);assert.equal(h.calls,3);
+});
+
+
+test('成果追问与改稿接续实际引用的原始依据，重启不丢失且篡改身份被拒绝',async t=>{
+ const h=await setup(t),scoped=await h.repository.forScope(h.auth,scope);
+ await importSource(scoped,{format:'text/plain',formatVersion:'1',sourceSystem:'user-text',bytes:Buffer.from('# 观察原件\n\n整理数据：第七天南瓜花开放，不能推断全年开花。'),importOrigin:'isolated_test',sessionId:null,eventId:'original-evidence',occurredAt:null},{requestId:'original-evidence',expectedStateRevision:h.repository.state(h.auth,scope).stateRevision});
+ const base=await h.prepare(),span=base.packet.evidence.find(e=>e.quote.includes('南瓜花'));assert.ok(span);
+ const done=await h.wait((await h.start(base.run)).operation.id),original=done.results[0];
+ assert.ok(original.summary.includes(base.packet.sourceReferences[0].title));
+ const request={...h.meta(),resultId:original.id,question:'只改版式，保留原文与引用。'};
+ const next=await h.post('ui_prepare_followup',request);assert.equal(next.status,200);
+ assert.ok(next.value.packet.evidence.some(e=>e.quoteHash===span.quoteHash));
+ assert.ok(next.value.packet.sourceReferences.some(r=>r.sourceId===span.sourceId));
+ assert.equal(next.value.packet.facts.length,0,'未确认原文不升级为确认事实');
+ const inputs=next.value.packet.taskInputs;
+ assert.ok(taskEvidence(h.repository,h.auth,scope,inputs).some(e=>e.quoteHash===span.quoteHash));
+ assert.throws(()=>taskEvidence(h.repository,h.auth,scope,[{...inputs[0],resultHash:'0'.repeat(64)}]),e=>e.code==='scope_denied');
+ await h.reopen();const replay=await h.post('ui_prepare_followup',request);assert.equal(replay.status,200);
+ assert.deepEqual(replay.value.packet,next.value.packet);assert.equal(h.calls,1,'准备、重启和原回执核对没有重执行');
 });

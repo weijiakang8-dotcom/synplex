@@ -3,6 +3,7 @@ import {fetchModelCatalog} from './model-catalog.mjs';
 import {randomUUID} from 'node:crypto';
 import {exactObject,modelFailure} from './model-contract.mjs';
 import {modelRequest} from './model-network.mjs';
+import {modelReasoningOptions} from './model-options.mjs';
 
 export const MODEL_SERVICE_TABLES=['model_probes'];
 export class ModelService{
@@ -45,8 +46,8 @@ export class ModelService{
     try{this.#db.prepare('INSERT INTO model_probes VALUES(?,?,?,?,?,NULL)').run(input.requestId,auth.ownerId,auth.actorId,selection,'unknown');}
     catch(error){vault.release(hold);throw error;}
     try{
-      const body=profile.binding.protocol==='responses'?{model:profile.binding.model,input:'Reply OK.',max_output_tokens:16}:{model:profile.binding.model,messages:[{role:'user',content:'Reply OK.'}],max_tokens:16};
-      if(profile.binding.effort!==null){if(profile.binding.protocol==='responses')body.reasoning={effort:profile.binding.effort};else body.reasoning_effort=profile.binding.effort;}
+      const raw=profile.binding.protocol==='responses'?{model:profile.binding.model,input:'Reply OK.',max_output_tokens:16}:{model:profile.binding.model,messages:[{role:'user',content:'Reply OK.'}],max_tokens:16};
+      const body=modelReasoningOptions(profile.binding,raw,profile.endpoint);
       const bytes=await this.#transport({endpoint:profile.endpoint,path:profile.binding.protocol==='responses'?'/responses':'/chat/completions',secret:profile.secret,body,timeoutMs:30000});
       const response=JSON.parse(bytes.toString('utf8'));
       if(!Array.isArray(response.choices)&&!Array.isArray(response.output))throw modelFailure('模型返回的回复格式不正确。');

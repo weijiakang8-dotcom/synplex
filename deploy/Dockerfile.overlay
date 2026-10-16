@@ -1,0 +1,14 @@
+# Only for a verified predecessor with identical locked runtime dependencies.
+ARG SYNPLEX_BASE_IMAGE
+FROM ${SYNPLEX_BASE_IMAGE}
+USER node
+WORKDIR /app
+COPY --chown=node:node public public
+COPY --chown=node:node services services
+COPY --chown=node:node packages packages
+COPY --chown=node:node adapters adapters
+COPY --chown=node:node plugins plugins
+COPY --chown=node:node integrations integrations
+COPY --chown=node:node scripts scripts
+COPY --chown=node:node migrations migrations
+COPY --chown=node:node deploy deploy

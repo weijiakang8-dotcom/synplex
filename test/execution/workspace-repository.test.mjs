@@ -267,3 +267,25 @@ test('late host result appends after manual changes, preserves failure and never
   for(const item of repository.pendingOutbox(auth,scope))repository.acknowledgeOutbox(auth,scope,item.id);
   assert.equal(repository.pendingOutbox(auth,scope).length,0);assert.equal(repository.list(auth,scope,'attempt').length,before);
 });
+
+test('host returns actual bytes atomically, retries preserve identity and mismatches or foreign actors cannot attach files',async t=>{
+ const {repository,auth}=setup(t),repo=await repository.forScope(auth,scope),p=await prepare(repository,auth,repo),bytes=Buffer.from('真实交付，不代表人工验收。');
+ const artifact={id:'returned',name:'交付.md',uri:'host:delivered',sha256:sha256(bytes),byteLength:bytes.length,mediaType:'text/markdown',verification:'reported'};
+ const req={protocolVersion:PROTOCOL_VERSION,scope,requestId:'file-return',expectedStateRevision:0,runId:p.reply.value.run.id,
+  result:{eventId:'return-event',attemptId:'return-attempt',provider:'codex',summary:'完成文件，等待核对。',artifacts:[artifact],checks:[],usage,supersedesResultId:null,occurredAt:null},artifactFiles:[{artifactId:artifact.id,base64:bytes.toString('base64')}]};
+ const before=repository.list(auth,scope,'result').length;
+ assert.throws(()=>repository.recordResult(auth,{...req,artifactFiles:[{artifactId:artifact.id,base64:Buffer.from('坏文件').toString('base64')}]}),errorIs('conflict'));
+ assert.equal(repository.list(auth,scope,'result').length,before);
+ const foreign=repository.createCredential({ownerId:'owner',actorId:'host-b',scope,capabilities:caps});
+ assert.throws(()=>repository.recordResult(repository.authenticate(foreign.token),req),errorIs('scope_denied'));
+ repository.fault=({method})=>{if(method==='record_result')throw new Error('file-return-crash')};
+ assert.throws(()=>repository.recordResult(auth,req),/file-return-crash/);
+ assert.equal(repository.list(auth,scope,'artifact_file').length,0);assert.equal(repository.list(auth,scope,'result').length,before);
+ repository.fault=null;const result=repository.recordResult(auth,req).value.result;
+ assert.deepEqual(repository.artifactFile(auth,scope,result.id,artifact.id).bytes,bytes);
+ assert.equal(result.trust,'host_reported');assert.equal(result.artifacts[0].verification,'reported');
+ assert.equal(repository.list(auth,scope,'result_review').length,0);
+ assert.equal(repository.recordResult(auth,req).duplicate,true);
+ const replay=repository.recordResult(auth,{...req,requestId:'file-return-new-receipt'}).value.result;
+ assert.equal(replay.id,result.id);assert.equal(repository.list(auth,scope,'artifact_file').length,1);
+});

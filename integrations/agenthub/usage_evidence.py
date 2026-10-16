@@ -96,7 +96,29 @@ async def projection(session, execution):
         "inputTokens": sum(row.input for row in rows) if valid else None,
         "outputTokens": sum(row.output for row in rows) if valid else None,
         "provenance": "provider_receipt" if observed else "estimate" if valid else "unknown",
-        "paidUsd": None, "priceStatus": "unknown", "failedCallSpans": failed_calls}
+        "paidUsd": None, "priceStatus": "unknown", "failedCallSpans": failed_calls,
+        "verification": await verification_projection(session, execution)}
+
+
+async def verification_projection(session, execution):
+    """Project the existing scoped audit, not a new model judgement."""
+    from app.models import AuditLog
+    rows = list((await session.execute(select(AuditLog).where(
+        AuditLog.resource_id == str(execution.id),
+        AuditLog.organization_id == execution.organization_id,
+        AuditLog.user_id == execution.user_id,
+        AuditLog.action == 'verification_feedback')
+        .order_by(AuditLog.created_at).limit(2))).scalars())
+    status, checks, recorded = 'UNKNOWN', [], execution.completed_at
+    if len(rows) == 1:
+        from document_delivery import parse_verification
+        import json
+        parsed = parse_verification(json.dumps(rows[0].details))
+        if parsed:
+            status, checks, recorded = parsed['verdict'], parsed['checks'], rows[0].created_at
+    return {'executionId': str(execution.id), 'workflowId': str(execution.workflow_id),
+            'status': status, 'checks': checks,
+            'recordedAt': recorded.isoformat() if recorded else None}
 
 
 def install_api(app, data):

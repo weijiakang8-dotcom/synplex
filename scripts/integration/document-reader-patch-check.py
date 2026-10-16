@@ -21,10 +21,15 @@ with tempfile.TemporaryDirectory(prefix='synplex-reader-patch-') as folder:
     for directory in [prior, candidate]:
         (directory / 'unchanged.py').write_text('# protected adapter\n')
     # This historical migration targets the reader/queue guard revision. Undo
-    # only the later evaluated multicall-binary path fix in this fixture;
+    # only the later evaluated multicall-binary path fix and migration startup
+    # guard in this fixture;
     # its exact historical hash remains mandatory and is never updated here.
     runtime = (ROOT / 'integrations/agenthub/engine_runtime.py').read_bytes().replace(
         b'str(valkey.absolute())', b'str(valkey.resolve())')
+    guard_start = runtime.index(b'def ensure_migrations_complete(root):')
+    guard_end = runtime.index(b'def configuration(root):', guard_start)
+    runtime = (runtime[:guard_start] + runtime[guard_end:]).replace(
+        b'    ensure_migrations_complete(root)\n', b'')
     assert hashlib.sha256(runtime).hexdigest() == patch.RUNTIME_AFTER
     (prior / 'engine_runtime.py').write_bytes(b'# synthetic previous runtime\n')
     (candidate / 'engine_runtime.py').write_bytes(runtime)

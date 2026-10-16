@@ -1,4 +1,6 @@
 import {businessNavigation,collaborationContext} from '../../public/workspace-navigation.js';
+import {projectRecap,bindProjectRecap,reviewCount,reviewQueue} from '../../public/project-recap.js';
+import {bindSourceCuration} from '../../public/source-curation.js';
 import {accountStorage} from '../../public/account-storage.js';
 import {isAccountPage} from '../../public/account-navigation.js';
 import {accountControls,accountLogoutLabel} from '../../public/accounts.js';
@@ -14,7 +16,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { TASK_STATUS, taskTitle, activityText, executionActivity, systemText } from '../../public/task-presentation.js';
+import { TASK_STATUS, taskTitle, activityText, executionActivity, resultChecks, systemText } from '../../public/task-presentation.js';
 import { readableText, errorText, backgroundNote, fileLabel } from '../../public/user-copy.js';
 import {uploadFormat,sourceExtension,documentExtension} from '../../public/document-formats.js';
 import {modelControls,effortOptions} from '../../public/execution-selection.js';
@@ -36,9 +38,10 @@ function page(view, executions = [], fixture = {}) {
   const app = { addEventListener() {}, querySelector(){return null;}, innerHTML: '' };
   const node = { addEventListener() {}, setAttribute() {}, classList: { add() {}, remove() {} } };
   const sandbox = {
+    projectRecap,bindProjectRecap,reviewCount,reviewQueue,bindSourceCuration,
     businessNavigation,collaborationContext,accountStorage,isAccountPage,accountControls,accountLogoutLabel,createAccountUI:()=>({show:async()=>{app.innerHTML=connectionScreen();}}),
     obsidianImportButton,bindObsidianImport(){},connectionScreen,showStartupFailure,bindModelUsageReview,executionModelUsage,taskChatReferenceField,chatReferenceCard,createChatTask,bindModelSettings,modelSettingsButton,bindPageFinder,bindInputMethodGuard(){},createWorkspaceLayout(){return {capture(){},attach(){},clear(){}};},approvalDetails,questionAction,questionHelp,waitingLabel,
-    taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice,TASK_STATUS, taskTitle, activityText, executionActivity, systemText, readableText, errorText, backgroundNote, fileLabel, modelControls,usageCard,budgetCard,conflictCard,conflictTitle,readConflictChoice,uploadFormat,sourceExtension,documentExtension,planEditor,taskPlanCards,revisionForm,stepNote,followupForm,conversationCard,currentQuestion,originalGoal,
+    taskPreparationKey,pendingTaskPreparation,taskPreparationInput,taskPreparationControls,preparationNotice,TASK_STATUS, taskTitle, activityText, executionActivity, resultChecks, systemText, readableText, errorText, backgroundNote, fileLabel, modelControls,usageCard,budgetCard,conflictCard,conflictTitle,readConflictChoice,uploadFormat,sourceExtension,documentExtension,planEditor,taskPlanCards,revisionForm,stepNote,followupForm,conversationCard,currentQuestion,originalGoal,
     traceError,supportMessage,runtimeStatusCard,importStatusCard,createWorkspacePages,createPageDrafts,PAGE_NAMES,PAGE_ACTIONS,createFileActions,observeActions(){},captureResultForms,restoreResultForms,claimEditor,sourceEditor,categoryFilter,AUTHORING_REQUESTS,pendingAuthoring,authoringRecovery,sourceBriefDialog,claimVersionDialog,claimComparison,metadataHistory,resultSelectionRecovery,bindResultSelection,selectedResultNeedsReview,
     document: { querySelector: s => s === '#app' ? app : node, createElement: () => node,
       body: { append() {} }, addEventListener() {} },
@@ -70,6 +73,14 @@ test('步骤记录保留历史而不冒充成功，原任务可展开且技术�
  assert.match(html,/步骤记录/);assert.match(html,/data-ai-action="view_execution_steps"/);assert.match(html,/执行记录：整理执行步骤/);assert.doesNotMatch(html,/正在整理执行步骤/);assert.match(html,/这一步未完成/);
  const active=page('task',[{goal:'整理项目报告',operation:{id:'activity-task',status:'running'},questions:[],activity:[...events,{stage:'exporting',label:'正在生成文件',at:'2026-10-15T01:02:00Z'}]}]);
  assert.doesNotMatch(active,/正在整理执行步骤/);assert.equal((active.match(/正在生成文件/g)||[]).length,1,'only the latest live status uses the present tense');
+});
+
+test('成果页显示真实核对状态和原因，执行结束不能掩盖未知核对',()=>{
+ const result={id:'r-check',summary:'执行工具已结束',trust:'host_reported',usage:{costUsd:null},artifacts:[],checks:[{status:'unknown',evidence:'核对回复格式异常，已有文件保留。'}]};
+ const html=page('results',[],{history:{results:[result]}});
+ assert.match(html,/自动核对尚无有效结论/);assert.match(html,/核对回复格式异常/);assert.doesNotMatch(html,/自动核对通过/);
+ assert.match(resultChecks([{status:'failed',evidence:'缺少来源'}],s=>s),/自动核对未通过/);
+ assert.match(resultChecks([{status:'passed',evidence:'来源与正文一致'}],s=>s),/仍需你验收/);
 });
 
 test('任务页优先新任务、历史默认折叠，长目标仍可完整展开', () => {
@@ -216,4 +227,13 @@ test('未连接页面与加载入口给出中文引导，刷新命令在技术�
   assert.ok(!html.includes('正式密钥'));
   const index=readFileSync(new URL('../../public/index.html',import.meta.url),'utf8');
   assert.match(index,/正在打开项目…/);
+});
+
+test('经验在普通待核对分页外仍有直接入口，并明确区分未确认状态',()=>{
+ const claim={id:'older-organized-lesson',type:'lesson',title:'恢复先核对',body:'经验：恢复时先核对原任务，避免重复执行。',condition:'仅适用于未知回执恢复。',reviewStatus:'pending',lifecycle:'active',recordedAt:'2026-10-16T00:00:00Z',occurredAt:null,evidence:[]};
+ const history={lessonCandidates:{items:[claim],total:1,complete:true}};
+ const home=page('progress',[],{history});
+ assert.match(home,/已确认经验/);assert.match(home,/另有 1 条待核对/);
+ assert.match(home,/data-nav="results">查看经验/);
+ const results=page('results',[],{history});assert.match(results,/待核对的经验 · 1/);assert.match(results,/older-organized-lesson/);assert.match(results,/尚未当作事实使用/);
 });

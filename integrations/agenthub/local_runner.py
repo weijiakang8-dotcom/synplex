@@ -213,6 +213,8 @@ def load_config(directory: Path, backend: Path):
     model_gateway.ModelGateway.stream = serial_stream
     from task_tools import install as install_task_tools
     install_task_tools()
+    from worker_output import install as install_worker_output
+    install_worker_output()
     from app.engine.tasks import celery_app, execute_workflow_task
     celery_app.conf.task_default_queue = "synplex-isolated"
     celery_app.conf.task_routes = {"agenthub.evaluate_execution": {"queue": "synplex-evaluation-disabled"}}

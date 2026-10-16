@@ -17,6 +17,8 @@ description: 查看项目进展和原文，在当前工具中继续任务，保�
 
 完成或受阻后，用record_result追加真实回执，包含实际产物、检查、失败和已知用量。提供稳定requestId、eventId和attemptId。观测不到的费用/token设null并标unknown/host_unavailable，不填0，不把历史文本标成独立检查，不冒充人工接受。
 
+有文件时，读取实际字节，以artifactFiles传入artifactId和base64；合计不超过1 MiB，回执中的sha256和byteLength必须匹配。不自动读取或跟随资料中的路径。超出限制则明确说明尚未回流的文件，不把只有文件名的回执当成可下载成果。
+
 有值得复用的经验时，用propose_lesson提出带原文的候选，等待用户在界面核对。扩展没有review或acceptance权限，不能用字符串取得人类授权。
 
 连接不确定先查get_operation或显式重放同一requestId与同一内容取原回执。禁止换新requestId自动重做。回流失败只补记录，不重执行。停止只停止自己的请求，不控制其他宿主进程。

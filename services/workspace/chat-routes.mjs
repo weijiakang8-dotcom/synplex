@@ -1,5 +1,6 @@
 import {PROTOCOL_VERSION} from '../../packages/contracts/validate.mjs';
 import {ChatService} from './chat-service.mjs';
+import {createCurationRoutes} from './curation-routes.mjs';
 import {exactObject,modelFailure} from './model-contract.mjs';
 
 const requestId=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value);
@@ -12,6 +13,7 @@ function valid(input,required,optional=[]){
 export function createChatRoutes({repository,execution,transport}){
   const slots=execution?{acquire:signal=>execution.acquireModelSlot(signal)}:undefined;
   const service=new ChatService({repository,slots,transport});
+  const curation=createCurationRoutes(repository,service);
   const routes={
     ui_chat_create:{keys:['requestId'],check:i=>requestId(i.requestId),run:(s,i)=>s.create(i.requestId)},
     ui_chat_list:{keys:['cursor'],check:i=>cursor(i.cursor),run:(s,i)=>s.list(i.cursor)},
@@ -24,6 +26,7 @@ export function createChatRoutes({repository,execution,transport}){
   };
   return {
     async handle({path,auth,input}){
+      const curated=await curation({path,auth,input});if(curated)return curated;
       const name=path.slice('/api/v1/'.length);if(!Object.hasOwn(routes,name))return null;
       const route=routes[name];valid(input,route.keys);
       if(auth.kind!=='ui'||input.protocolVersion!==PROTOCOL_VERSION||!route.check(input))throw modelFailure('没有这项对话操作，或内容不完整。');

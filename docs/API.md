@@ -31,6 +31,12 @@ HTTP 使用 `POST /api/v1/{工具名}`；stdio MCP 使用同一组 Schema。`sco
 
 健康接口只表明服务可响应，不证明任务质量、模型连接或费用收益。
 
+## 整理资料与真实文件回流
+
+网页资料整理使用 `ui_curate_start` 与 `ui_curate_state`，字段以路由契约为准。原文初筛、模型整理和人工确认分别计数；后台整理不会代替用户确认，也不会删除未入选原件。停止复用对应整理对话的原请求停止入口，不自动重发。
+
+宿主 `record_result.artifactFiles` 可携带与成果清单对应的 base64 文件字节。服务核对长度、SHA-256、格式与准确任务范围，通过事务一起保存成果与可下载文件；不需要用户寻找宿主电脑的原文件。文件保存不等于人工验收。
+
 ## 对话与模型连接
 
 `ui_models`、`ui_save_model`、`ui_change_model`、`ui_discover_models`、`ui_probe_model` 仅供具备准确项目权限的网页身份使用。发现型号可以使用未保存的 `endpoint` 与 `secret` 查询 `/models`；不保存秘密、不生成回复，也可以沿用已保存连接的 `selection`。型号能力仍需另外核对。

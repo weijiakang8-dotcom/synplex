@@ -23,3 +23,8 @@ test('停用的收费评估保留原消息；实际待办、未知回执与其�
  assert.equal(result.status,0,result.stderr);
  assert.match(result.stdout,/modelCalls=0/);
 });
+
+test('执行回复/文稿适配迁移只接受精确已评估改动，拒绝额外代码与回执替身',()=>{
+ const result=spawnSync('/usr/bin/python3',['-B','scripts/integration/worker-output-patch-check.py'],{encoding:'utf8',timeout:10000});
+ assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/modelCalls=0/);
+});

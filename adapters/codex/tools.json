@@ -335,6 +335,29 @@
         },
         "result": {
           "$ref": "#/$defs/ResultInput"
+        },
+        "artifactFiles": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "可选的成果文件真实内容，合计不超过1兆；与result.artifacts中的大小和指纹一致，保存不代表用户验收。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "artifactId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base64": {
+                "type": "string",
+                "maxLength": 1398104
+              }
+            },
+            "required": [
+              "artifactId",
+              "base64"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [

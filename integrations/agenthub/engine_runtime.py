@@ -64,9 +64,17 @@ def setup(root, backend, pg_bin, valkey, *, api_port, redis_port, database_port)
     return config
 
 
+def ensure_migrations_complete(root):
+    for receipt in root.glob('*-migration.json'):
+        record = private_read(receipt)
+        if record.get('format') == 'synplex.worker-output-migration/1' and record.get('status') != 'applied':
+            raise RuntimeError('执行环境的升级尚未核对完成，保留原数据；请先核对迁移回执，不能启动任务。')
+
+
 def configuration(root):
     if root.is_symlink() or any((root / marker).exists() for marker in ["setup-incomplete.json", "restore-incomplete.json", "recovery-incomplete.json", "engine-snapshot.json", "provider-update-incomplete.json"]):
         raise RuntimeError("Engine setup is incomplete or the directory is not private")
+    ensure_migrations_complete(root)
     saved=private_read(root / "engine-startup.json")
     if saved.get("format")!="synplex.engine-startup/1":raise RuntimeError("Unknown engine startup format")
     backend=Path(saved["backend"]).resolve()

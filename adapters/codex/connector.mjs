@@ -7,7 +7,7 @@ export function validateScope(scope) {
   return Object.freeze({projectId:scope.projectId,versionId:scope.versionId,branchId:scope.branchId});
 }
 export class WorkspaceConnector {
-  constructor({endpoint,tokenFile,scope,timeoutMs=15_000}) {
+  constructor({endpoint,tokenFile,scope,timeoutMs=60_000}) {
     let url;try{url=new URL(endpoint);}catch{throw feedback('capability_unavailable','项目服务地址无效。','配置已启动的本机服务。');}
     if(url.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(url.hostname)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||!url.port)throw feedback('scope_denied','扩展只连接明确配置的本机服务。','使用本机独立端口，不转发到外部服务。');
     this.endpoint=url.origin;this.tokenFile=tokenFile;this.scope=validateScope(scope);this.timeoutMs=timeoutMs;

@@ -1,4 +1,5 @@
 // Rebuildable projections only. Original records remain the source of truth.
+import {primaryTopic,sourceRelevance} from '../../packages/ingestion/source-relevance.mjs';
 export class SearchIndex {
  constructor(db) {
   this.db=db;
@@ -109,25 +110,33 @@ export class SearchIndex {
  ranked(partition,{terms,occurrenceIds,limit}) {
   this.ensureCurrent();
   const selected=occurrenceIds.length?JSON.stringify(occurrenceIds):null;
+  const sources=this.db.prepare(`SELECT o.id,o.body_json,coalesce(json_extract(m.body_json,'$.title'),json_extract(f.body_json,'$.name'),'') title,
+   (SELECT substr(d.body_text,1,4096) FROM search_occurrences l JOIN search_documents d ON d.id=l.document_id AND d.partition=l.partition WHERE l.partition=o.partition AND l.occurrence_id=o.id ORDER BY l.block_order LIMIT 1) preamble
+   FROM records o LEFT JOIN records m ON m.partition=o.partition AND m.kind='source_metadata' AND m.id=json_extract(o.body_json,'$.sourceId')
+   LEFT JOIN records f ON f.partition=o.partition AND f.kind='source_filename' AND f.id=json_extract(o.body_json,'$.sourceId')
+   WHERE o.partition=? AND o.kind='occurrence'`).all(partition);
+  const occurrences=new Map(sources.map(r=>[r.id,JSON.parse(r.body_json)])),topic=primaryTopic(occurrences);
+  const policies=JSON.stringify(Object.fromEntries(sources.map(r=>[r.id,sourceRelevance(occurrences.get(r.id),r.title,topic,r.preamble??'')])));
   // A bounded term list; scan only this project's indexed text, never all tenants.
   // Include titles/paths, so a focused project note beats an incidental phrase.
   const weights=terms.map(()=>"(CASE WHEN instr(d.normalized_text,?)>0 THEN 1 ELSE 0 END + CASE WHEN instr(lower(coalesce(json_extract(m.body_json,'$.title'),f.name,'')),?)>0 THEN 4 ELSE 0 END)").join('+');
   if(!weights)return [];
-  const rows=this.db.prepare(`WITH candidates AS (
+  const rows=this.db.prepare(`WITH policies AS MATERIALIZED (SELECT key,value FROM json_each(?)), candidates AS (
    SELECT d.*,o.body_json occurrence_json,
     coalesce(json_extract(m.body_json,'$.title'),f.name,'项目资料') title,
-    CASE WHEN json_valid(json_extract(j.body_json,'$.metadata.sessionId')) THEN json_extract(json_extract(j.body_json,'$.metadata.sessionId'),'$.path') ELSE NULL END path,
-    (${weights}${terms.includes('实测')?"+CASE WHEN d.body_text GLOB '*[0-9]*' AND (instr(d.body_text,'|')>0 OR instr(d.body_text,'%')>0) THEN 8 ELSE 0 END":''}) score
+    json_extract(policy.value,'$.path') path,json_extract(policy.value,'$.role') evidence_role,json_extract(policy.value,'$.priority') priority,
+    (${weights}+json_extract(policy.value,'$.priority')) score
    FROM search_documents d
    JOIN search_occurrences l ON l.document_id=d.id AND l.partition=d.partition
    JOIN records o ON o.partition=d.partition AND o.kind='occurrence' AND o.id=l.occurrence_id
+   JOIN policies policy ON policy.key=l.occurrence_id
    LEFT JOIN records m ON m.partition=d.partition AND m.kind='source_metadata' AND m.id=d.source_id
    LEFT JOIN (SELECT partition,id,json_extract(body_json,'$.name') name FROM records WHERE kind='source_filename') f ON f.partition=d.partition AND f.id=d.source_id
-   LEFT JOIN records j ON j.partition=d.partition AND j.kind='import_job' AND j.id=(SELECT z.id FROM records z WHERE z.partition=d.partition AND z.kind='import_job' AND json_extract(z.body_json,'$.sourceId')=d.source_id ORDER BY z.rowid DESC LIMIT 1)
    WHERE d.partition=? AND (? IS NULL OR l.occurrence_id IN (SELECT value FROM json_each(?)))
+   AND (? IS NOT NULL OR json_extract(policy.value,'$.eligible')=1)
   ), grouped AS (
-   SELECT *,row_number() OVER(PARTITION BY source_id ORDER BY score DESC,id DESC) position FROM candidates WHERE score>0
-  ) SELECT * FROM grouped WHERE position<=6 ORDER BY score DESC,id DESC LIMIT ?`).all(...terms.flatMap(t=>[t,t]),partition,selected,selected,limit);
+   SELECT *,row_number() OVER(PARTITION BY source_id ORDER BY score DESC,id DESC) position FROM candidates WHERE score>priority
+  ) SELECT * FROM grouped WHERE position<=6 ORDER BY score DESC,id DESC LIMIT ?`).all(policies,...terms.flatMap(t=>[t,t]),partition,selected,selected,selected,limit);
   return rows;
  }
  find(partition,query,offset) {

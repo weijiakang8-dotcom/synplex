@@ -1,11 +1,11 @@
 import {modelFailure} from './model-contract.mjs';
 import {probeUsage} from './model-service.mjs';
+import {modelReasoningOptions} from './model-options.mjs';
 
-export function buildChatBody(binding,messages,stream){
+export function buildChatBody(binding,messages,stream,endpoint){
   const body=binding.protocol==='responses'?{model:binding.model,input:messages,max_output_tokens:binding.maxOutputTokens,stream}:{model:binding.model,messages,max_tokens:binding.maxOutputTokens,stream};
   if(stream&&binding.protocol==='chat-completions')body.stream_options={include_usage:true};
-  if(binding.effort!==null){if(binding.protocol==='responses')body.reasoning={effort:binding.effort};else body.reasoning_effort=binding.effort;}
-  return body;
+  return modelReasoningOptions(binding,body,endpoint);
 }
 function responseText(value){
   if(value.choices)return value.choices[0]?.message?.content??'';

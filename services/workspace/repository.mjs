@@ -1,4 +1,7 @@
+import {sourcePreambles} from './source-preamble.mjs';
 import {AccountStore} from './account-store.mjs';
+import {decodeResultFiles} from '../../packages/contracts/result-files.mjs';
+import {CURATION_VERSION,protectedEvent,curationPrompt,validateCuration} from '../../packages/ingestion/event-curation.mjs';
 import {accountKey} from './account-mail.mjs';
 import {OBSIDIAN_SOURCE,readNoteIdentity} from '../../public/obsidian-notes.js';
 import {frozenCallAccounting} from './model-pricing.mjs';
@@ -29,6 +32,7 @@ import {validateTaskPlan,projectTaskPlan,requireReadyStep,startableTaskSteps} fr
 import {compareTaskRoutes,planRouteFingerprint} from '../../packages/execution/task-routes.mjs';
 import {sourceMetadata as validateSourceMetadata,claimDraft,claimVersions,claimDifference} from './authoring.mjs';
 import {MemoryProjection} from './memory-projection.mjs';
+import {CandidateSelection} from './candidate-selection.mjs';
 import {recordJourney} from './record-journey.mjs';
 import {projectExpression,renderExpressionHtml,validExpressionInput} from './project-expression.mjs';
 import {validateExpressionVersion,expressionSummary,requireExpressionBytes} from './expression-versions.mjs';
@@ -68,6 +72,7 @@ export class WorkspaceRepository {
   #limits=null;
   #search;
   #memory;
+  #selection;
   constructor({ dataDir, fault = null, executionLimits, modelTransport }) {
     if (!dataDir) throw new TypeError('An isolated dataDir is required');
     const dir = resolve(dataDir);this.#dataDir=dir;
@@ -83,7 +88,7 @@ export class WorkspaceRepository {
     this.#db.exec(readFileSync(new URL('../../migrations/001-workspace.sql', import.meta.url), 'utf8'));
     this.#db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(1, now());
     prepareExecutionStatus(this.#db);
-    try{this.#search=new SearchIndex(this.#db);this.#memory=new MemoryProjection(this.#db);}catch(error){this.#db.close();throw error;}
+    try{this.#search=new SearchIndex(this.#db);this.#memory=new MemoryProjection(this.#db);this.#selection=new CandidateSelection(this.#db);}catch(error){this.#db.close();throw error;}
     this.#chatStore=new ChatStore(this.#db);
     this.#chatStore.interrupt();
     this.#modelVault=new ModelVault(this.#db,dir);
@@ -324,6 +329,17 @@ export class WorkspaceRepository {
     const t=this.#currentAuth(auth,scope,'read_memory'),row=this.#row(t.partition);
     return {scope:clone(scope),stateRevision:row.state_revision,permissionRevision:row.permission_revision};
   }
+  pendingLessons(auth,scope){
+    const t=this.#currentAuth(auth,scope,'read_memory');
+    this.#selection.ensure(t.partition);
+    const rows=this.#db.prepare(`SELECT c.body_json,count(*) OVER() total FROM records c
+      JOIN candidate_selection s ON s.partition=c.partition AND s.claim_id=c.id AND s.selected=1
+      WHERE c.partition=? AND c.kind='claim' AND json_extract(c.body_json,'$.type')='lesson'
+      AND json_extract(c.body_json,'$.lifecycle')='active' AND json_extract(c.body_json,'$.reviewStatus')='pending'
+      AND COALESCE(json_extract(c.body_json,'$.condition'),'') NOT LIKE '仅为原文规则候选%'
+      ORDER BY c.rowid DESC LIMIT 50`).all(t.partition);
+    return {items:rows.map(r=>JSON.parse(r.body_json)),total:rows[0]?.total??0,complete:(rows[0]?.total??0)<=50};
+  }
   chunkCheckpoint(auth,scope,key) {
     const t=this.#currentAuth(auth,scope,'read_memory');
     return this.#identity(t.partition,'checkpoint',key);
@@ -339,6 +355,21 @@ export class WorkspaceRepository {
       permissionRevision: current.permission_revision, facts: active('fact'), decisions: active('decision'),
       failures: active('failure'), lessons: active('lesson'), pending: claims.filter(c => c.reviewStatus === 'pending' && c.lifecycle === 'active'),
       conflicts, unknowns: claims.filter(c => c.type === 'unknown' && c.lifecycle==='active' && c.reviewStatus !== 'rejected').map(c => c.body) });
+  }
+  contextState(auth,scope){
+    const t=this.#currentAuth(auth,scope,'read_memory'),state=this.state(auth,scope,{pendingLimit:0});
+    state.pending=this.#selection.all(t.partition);state.unknowns=state.pending.filter(c=>c.type==='unknown').map(c=>c.body);
+    const raw=this.#db.prepare("SELECT count(*) n FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')='pending'").get(t.partition).n;
+    if(raw>state.pending.length)state.unknowns.push(`资料筛选：${raw-state.pending.length}段噪声、重复或归属未清的原文未加入候选背景，完整原件仍可查询。`);return state;
+  }
+  summaryState(auth,scope){
+    const state=this.state(auth,scope,{pendingLimit:0}),page=this.pendingPage(auth,scope);
+    for(const claim of page.items){
+      state.pending.push(claim);
+      if(Buffer.byteLength(JSON.stringify(state))>512*1024){state.pending.pop();break;}
+    }
+    if(page.selection.unreviewedFragments||page.total)state.unknowns.push(`项目概览：展示${state.pending.length}/${page.total}条待核对线索，优先展示已整理事件；原文共${page.selection.unreviewedFragments}段。完整资料与未展示记录均保留，可查找原文或按目标准备任务；概览不是完整历史。`);
+    return validateWire('ProjectState',state);
   }
   #mutate(auth, scope, method, input, meta, capability, semantic, fn, allowStale = false) {
     checkMeta(meta);
@@ -601,6 +632,48 @@ export class WorkspaceRepository {
       return { value: items, changed: items.length > 0 };
     });
   }
+  admitCuration(auth,request){
+    if(this.#currentAuth(auth,request.scope,'write_memory').kind!=='ui')denied();
+    return this.#mutate(auth,request.scope,'curate_sources',{...request,expectedStateRevision:0},requestMeta(request),'write_memory',false,(t,id)=>{
+      // Starting another batch is not consent to pay again for identical
+      // failed/unknown input. Keep those records visible for manual review.
+      const attempted=new Set(this.#list(t.partition,'source_curation').flatMap(b=>b.claims.map(payloadHash)));
+      const available=this.#selection.all(t.partition).reverse().filter(c=>!protectedEvent(c)&&!attempted.has(payloadHash(c))&&!c.evidence.some(e=>this.#get(t.partition,'source_metadata',e.sourceId)?.locked));
+      const claims=[];
+      for(const claim of available){if(claims.length>=12)break;if(curationPrompt([...claims,claim]).length<=15000)claims.push(claim);}
+      if(!claims.length)fail('capability_unavailable','没有尚未整理的新线索。','已整理和未通过核对的记录均保留；查看原记录，不会重复使用模型额度。');
+      const value={id,version:CURATION_VERSION,prompt:curationPrompt(claims),actorId:t.actorId,claims:clone(claims),selection:clone(request.selection),status:'prepared',createdAt:now(),outputClaimIds:[],decisions:null,notice:'等待整理'};
+      this.#put(t.partition,'source_curation',value);return {value};
+    }).value;
+  }
+  curation(auth,scope,id){
+    const t=this.#currentAuth(auth,scope,'read_memory'),value=this.#get(t.partition,'source_curation',id);
+    if(t.kind!=='ui'||!value||value.actorId!==t.actorId)denied();return clone(value);
+  }
+  curationHistory(auth,scope){
+    const t=this.#currentAuth(auth,scope,'read_memory');if(t.kind!=='ui')denied();
+    return this.recent(auth,scope,'source_curation',20).filter(b=>b.actorId===t.actorId).map(b=>({id:b.id,status:b.status,inputCount:b.claims.length,outputCount:b.outputClaimIds.length,notice:b.notice}));
+  }
+  failCuration(auth,scope,id,notice){
+    const batch=this.curation(auth,scope,id);if(batch.status!=='prepared')return batch;
+    return this.#mutate(auth,scope,'fail_curation',{id,notice},{requestId:'curation-failure-'+id,expectedStateRevision:this.revision(auth,scope).stateRevision},'write_memory',true,t=>{
+      const value={...batch,status:'failed',notice,finishedAt:now()};this.#replace(t.partition,'source_curation',value);return {value};
+    }).value;
+  }
+  finishCuration(auth,scope,id,chatId){
+    const batch=this.curation(auth,scope,id);if(batch.status==='completed'||batch.status==='failed')return batch;
+    const store=this.chat(auth,scope),chat=store.get(chatId),selection=Object.fromEntries(['connectionId','model','effort'].map(k=>[k,chat.selection[k]]));
+    if(chat.status!=='completed'||chat.conversationId!==store.create('curation-'+id).id||chat.requestId!=='curation-'+id||chat.content!==(batch.prompt??curationPrompt(batch.claims))||payloadHash(selection)!==payloadHash(batch.selection))denied();
+    const {candidates,decisions}=validateCuration(batch,chat.answer),t=this.#currentAuth(auth,scope,'write_memory');
+    for(const claim of batch.claims){const current=this.#get(t.partition,'claim',claim.id);if(payloadHash(current)!==payloadHash(claim)||current.reviewStatus!=='pending'||current.lifecycle!=='active')fail('stale_context','原记录已被修改，本次整理没有替代它。','保留回复，按最新记录重新决定。');}
+    const saved=this.appendCandidates(auth,scope,candidates,{requestId:'curation-output-'+id,expectedStateRevision:this.#row(t.partition).state_revision});
+    return this.#mutate(auth,scope,'finish_curation',{id,chatId:chat.id,outputIds:saved.value.map(c=>c.id)},{requestId:'curation-finish-'+id,expectedStateRevision:saved.stateRevision},'write_memory',true,trusted=>{
+      // Recheck under the writer lock; neither human judgments nor source locks
+      // can be replaced by a late model reply.
+      for(const claim of batch.claims){const current=this.#get(trusted.partition,'claim',claim.id);if(payloadHash(current)!==payloadHash(claim)||claim.evidence.some(e=>this.#get(trusted.partition,'source_metadata',e.sourceId)?.locked))fail('stale_context','整理期间原文或判断发生变化。','原记录和模型回复都已保留。');}
+      const value={...batch,status:'completed',chatId:chat.id,outputClaimIds:saved.value.map(c=>c.id),decisions,notice:'已整理为待核对记录，尚未人工确认',finishedAt:now()};this.#replace(trusted.partition,'source_curation',value);return {value};
+    }).value;
+  }
   sourceMetadata(auth,scope,sourceId){
     const t=this.#currentAuth(auth,scope,'read_memory');if(!this.#get(t.partition,'source',sourceId))denied();
     return this.#get(t.partition,'source_metadata',sourceId)??{id:sourceId,revision:0,title:(this.#get(t.partition,'source_filename',sourceId)?.name??'').slice(0,160),category:'',tags:[],locked:false};
@@ -791,11 +864,11 @@ export class WorkspaceRepository {
       // Prefer the densest bounded passage, keeping exact UTF-16 offsets.
       let center=matches[0]?.index??0,best=-1;
       for(const m of matches){const n=matches.filter(x=>Math.abs(x.index-m.index)<500).length;if(n>best){best=n;center=m.index;}}
-      let start=Math.max(0,center-120),end=Math.min(text.length,start+1000);
+      let start=text.length<=1000?0:Math.max(0,center-120),end=Math.min(text.length,start+1000);
       if(start>0&&/[\uDC00-\uDFFF]/.test(text[start]))start--;
       if(end<text.length&&/[\uD800-\uDBFF]/.test(text[end-1]))end--;
       const quote=text.slice(start,end),span={sourceId:row.source_id,parsedRevisionId:row.parsed_id,occurrenceId:occurrence.id,blockId:row.block_id,start,end,offsetUnit:'utf16_code_unit',quote,quoteHash:sha256(Buffer.from(quote))};
-      return {span,title:row.title,path:row.path??null,score:row.score};
+      return {span,title:row.title,path:row.path??null,score:row.score,evidenceRole:row.evidence_role};
     }));
   }
   query(auth, scope, query) {
@@ -867,9 +940,8 @@ export class WorkspaceRepository {
   pendingPage(auth,scope,cursor=null){
     const t=this.#currentAuth(auth,scope,'read_memory'),queryHash=payloadHash({view:'pending',limit:100});
     const offset=this.#decodeCursor(cursor,t.partition,queryHash);
-    const rows=this.#db.prepare("SELECT body_json FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')='pending' ORDER BY rowid DESC LIMIT 101 OFFSET ?").all(t.partition,offset);
-    const total=this.#db.prepare("SELECT count(*) n FROM records WHERE partition=? AND kind='claim' AND json_extract(body_json,'$.lifecycle')='active' AND json_extract(body_json,'$.reviewStatus')='pending'").get(t.partition).n;
-    return {items:rows.slice(0,100).map(r=>JSON.parse(r.body_json)),total,cursor:rows.length>100?this.#encodeCursor(t.partition,queryHash,offset+100):null};
+    const {more,...page}=this.#selection.page(t.partition,offset);
+    return {...page,cursor:more?this.#encodeCursor(t.partition,queryHash,offset+100):null};
   }
   materialPage(auth,scope,cursor=null){
     const t=this.#currentAuth(auth,scope,'read_memory'),queryHash=payloadHash({view:'materials',limit:100});
@@ -1190,6 +1262,7 @@ export class WorkspaceRepository {
   }
   recordResult(auth, request) {
     validateWire('RecordResultRequest', request); validateUsage(request.result.usage);
+    const files=decodeResultFiles(request);
     return this.#mutate(auth, request.scope, 'record_result', { ...request, expectedStateRevision: 0 },
       { requestId: request.requestId, expectedStateRevision: request.expectedStateRevision }, 'record_result', true, (trusted, id) => {
         const run = this.#get(trusted.partition, 'run', request.runId), result = request.result;
@@ -1198,6 +1271,7 @@ export class WorkspaceRepository {
         const existing = this.#identity(trusted.partition, 'result', identity);
         if (existing) {
           if (existing.payloadHash !== payloadHash(result)) fail('conflict', '同一执行事件内容发生变化。', '修订请使用新事件并关联旧结果。', 'never');
+          for(const file of files)this.#storeArtifactBytes(trusted,existing.id,file.artifact,file.bytes);
           const operation = { id, requestId: request.requestId, status: 'succeeded', executionStatus: 'unknown', writebackStatus: 'saved', resultId: existing.id, error: null };
           return { value: { result: existing, operation }, operation, changed: false };
         }
@@ -1211,6 +1285,7 @@ export class WorkspaceRepository {
         validateWire('ResultRevision', normalized);
         this.#put(trusted.partition, 'result', normalized, identity);
         this.#put(trusted.partition, 'raw_result', { id: normalized.id, input: raw });
+        for(const file of files)this.#storeArtifactBytes(trusted,normalized.id,file.artifact,file.bytes);
         const attempt = oldAttempt ?? { id: result.attemptId, runId: run.id, executorOwner: run.executorOwner, status: 'unknown', resultRevisionIds: [], usage: unknownUsage(), createdAt: now(), finishedAt: null };
         attempt.resultRevisionIds.push(normalized.id);
         // Reports cannot establish business success or provider completion. Unknown observations stay unknown.
@@ -1571,6 +1646,13 @@ export class WorkspaceRepository {
   }
   // Separately verified bytes do not rewrite immutable host reports or certify
   // business acceptance. Public paths/URIs are never dereferenced automatically.
+  #storeArtifactBytes(t,resultId,artifact,bytes){
+    const id=payloadHash({resultId,artifactId:artifact.id}),prior=this.#get(t.partition,'artifact_file',id);
+    if(prior)return clone(prior);
+    this.#db.prepare('INSERT OR IGNORE INTO raw_blobs VALUES (?,?,?)').run(t.ownerId,artifact.sha256,bytes);
+    const receipt={id,resultId,artifactId:artifact.id,sha256:artifact.sha256,byteLength:bytes.length,name:artifact.name,mediaType:artifact.mediaType,verifiedAt:now(),method:'sha256_and_length',verifiedBy:t.actorId};
+    this.#put(t.partition,'artifact_file',receipt);return clone(receipt);
+  }
   saveArtifactFile(auth,scope,resultId,artifact,bytes) {
     const t=this.#currentAuth(auth,scope,'review_memory');if(t.kind!=='ui')denied();
     bytes=Buffer.from(bytes);validateWire('Artifact',artifact);
@@ -1579,11 +1661,7 @@ export class WorkspaceRepository {
       this.#currentAuth(auth,scope,'review_memory');
       const result=this.#get(t.partition,'result',resultId),reported=result?.artifacts.find(a=>a.id===artifact.id);
       if(!reported||payloadHash(reported)!==payloadHash(artifact)||sha256(bytes)!==artifact.sha256||bytes.length!==artifact.byteLength)fail('conflict','文件与原成果回执不一致。','核对对应原文件，不修改旧回执。');
-      const id=payloadHash({resultId,artifactId:artifact.id}),prior=this.#get(t.partition,'artifact_file',id);
-      if(prior)return clone(prior);
-      this.#db.prepare('INSERT OR IGNORE INTO raw_blobs VALUES (?,?,?)').run(t.ownerId,artifact.sha256,bytes);
-      const receipt={id,resultId,artifactId:artifact.id,sha256:artifact.sha256,byteLength:bytes.length,name:artifact.name,mediaType:artifact.mediaType,verifiedAt:now(),method:'sha256_and_length',verifiedBy:t.actorId};
-      this.#put(t.partition,'artifact_file',receipt);return clone(receipt);
+      return this.#storeArtifactBytes(t,resultId,artifact,bytes);
     });
   }
   artifactFile(auth,scope,resultId,artifactId) {
@@ -1678,6 +1756,8 @@ export class ScopedRepository {
   #auth;
   constructor(repository, auth, scope) { this.#repository = repository; this.#auth = auth; this.scope = Object.freeze(scope); Object.freeze(this); }
   async getState() { return this.#repository.state(this.#auth, this.scope); }
+  async getSummaryState() { return this.#repository.summaryState(this.#auth, this.scope); }
+  async getContextState() {return this.#repository.contextState(this.#auth,this.scope);}
   async getRevision() { return this.#repository.revision(this.#auth,this.scope); }
   async getClaimJourney(id) { return this.#repository.claimDetail(this.#auth,this.scope,id); }
   async taskConflicts(selectedOccurrenceIds) { return this.#repository.taskConflicts(this.#auth, this.scope, selectedOccurrenceIds); }
@@ -1687,6 +1767,7 @@ export class ScopedRepository {
   async appendParsedRevisions(input, meta) { return this.#repository.appendParsed(this.#auth, this.scope, input, meta); }
   async appendOccurrences(input, meta) { return this.#repository.appendOccurrences(this.#auth, this.scope, input, meta); }
   async appendCandidates(input, meta) { return this.#repository.appendCandidates(this.#auth, this.scope, input, meta); }
+  async sourcePreambles(spans) { return sourcePreambles(this.#repository,this.#auth,this.scope,spans); }
   async sourceDescriptions(ids) { return this.#repository.sourceDescriptions(this.#auth,this.scope,ids); }
   async retrieveContext(query) { return this.#repository.retrieveContext(this.#auth,this.scope,query); }
   async queryEvidence(query) { return this.#repository.query(this.#auth, this.scope, query); }

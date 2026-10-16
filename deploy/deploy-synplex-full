@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Run by the existing server administrator. No new runner sudo authority.
+set -Eeuo pipefail
+umask 077
+[[ $EUID == 0 && ${1:-} =~ ^[0-9a-f]{40}$ ]] || exit 2
+target=$1
+root=/opt/synplex
+config=/etc/synplex/deployment-full.env
+[[ -f $config && ! -L $config && $(stat -c %u "$config") == 0 ]] || exit 42
+(( (8#$(stat -c %a "$config") & 8#022) == 0 )) || exit 42
+source "$config"
+mkdir -p "$root/releases" "$root/backups"
+exec 9>"$root/deployment.lock"
+flock -n 9 || { echo 'Another release is active'; exit 3; }
+previous=$(cat "$root/active-release")
+[[ $previous =~ ^[0-9a-f]{40}$ && $previous != "$target" ]] || exit 3
+baseline="$root/releases/$previous"
+release="$root/releases/$target"
+[[ -d $baseline ]] || exit 42
+available=$(df --output=avail -k "$root" | tail -1)
+volume=$(docker volume inspect synplex-full_synplex_full_data --format '{{.Mountpoint}}')
+volume_kb=$(du -sk "$volume" | cut -f1)
+source_kb=$(du -sk "$baseline" | cut -f1)
+# Reserve worst-case uncompressed data plus archive/source/overlay room.
+# Never assume a compressible database or prune prior recovery assets.
+required_kb=$((volume_kb+volume_kb/10+source_kb*3+256*1024))
+(( available > required_kb )) || { echo "Insufficient space: need ${required_kb}KiB; existing files retained"; exit 4; }
+if [[ ! -d $release ]]; then
+ curl --fail --location --max-time 240 "https://api.github.com/repos/weijiakang8-dotcom/synplex/tarball/$target" -o "$root/archive-$target.tar.gz"
+ mkdir -m 700 "$release"
+ tar -xzf "$root/archive-$target.tar.gz" --strip-components=1 -C "$release"
+ printf '%s\n' "$target" > "$release/.source-ready"
+fi
+[[ $(cat "$release/.source-ready") == "$target" ]] || exit 4
+# No dependency, engine schema, persistent format or deleted-file change may
+# take this thin path. Those require a reviewed full build/migration instead.
+for path in package.json package-lock.json deploy/Dockerfile.full deploy/requirements-container.lock vendor migrations; do
+ diff -qr "$baseline/$path" "$release/$path" >/dev/null || { echo "Full build required: $path"; exit 4; }
+done
+python3 - "$baseline" "$release" <<'PY'
+from pathlib import Path
+import sys
+a,b=map(Path,sys.argv[1:])
+for name in ['public','services','packages','adapters','plugins','integrations','scripts','deploy']:
+ missing=[p.relative_to(a) for p in (a/name).rglob('*') if p.is_file() and not (b/p.relative_to(a)).is_file()]
+ if missing: raise SystemExit('Full build required for removed source files')
+PY
+docker build --build-arg "SYNPLEX_BASE_IMAGE=synplex-full:$previous" -f "$release/deploy/Dockerfile.overlay" -t "synplex-full:$target" "$release"
+available=$(df --output=avail -k "$root" | tail -1)
+volume_kb=$(du -sk "$volume" | cut -f1)
+(( available > volume_kb+volume_kb/10+128*1024 )) || { echo 'Not enough space for a verified data backup; current service retained'; exit 4; }
+compose(){ SYNPLEX_IMAGE_TAG="$1" docker compose --project-name synplex-full --env-file "$config" -f "$2/deploy/compose.full.yml" "${@:3}"; }
+compose "$target" "$release" config --quiet
+docker exec -i synplex-full-workspace-1 node --input-type=module - <<'JS'
+import {DatabaseSync} from 'node:sqlite';
+const d=new DatabaseSync('/var/lib/synplex/workspace/workspace.sqlite',{readOnly:true});
+const work=d.prepare("SELECT count(*) n FROM records WHERE kind='operation' AND json_extract(body_json,'$.status') IN ('queued','running')").get().n;
+const chat=d.prepare("SELECT count(*) n FROM chat_requests WHERE status IN ('queued','running')").get().n;
+if(work+chat)throw Error('Work still active; deployment deferred');
+if(d.prepare('PRAGMA integrity_check').get().integrity_check!=='ok')throw Error('Database integrity failed');
+d.close();
+JS
+stopped=false
+migration_attempted=false
+maintenance=''
+offline_migration(){
+ docker run --rm --network none --entrypoint /bin/sh \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --mount "type=volume,source=synplex-full_synplex_full_data,target=/var/lib/synplex" \
+  --mount "type=bind,source=$baseline,target=/previous,readonly" \
+  --mount "type=bind,source=$maintenance,target=/maintenance" \
+  "synplex-full:$target" /app/deploy/migrate-worker.sh "$1"
+}
+rollback(){
+ local rc=$?
+ trap - ERR
+ if $stopped; then
+  compose "$target" "$release" stop -t 90 workspace || true
+  if $migration_attempted && ! offline_migration is-previous && ! offline_migration rollback; then
+   echo 'Runtime downgrade refused: retain candidate, snapshot and all new writes; manual reconciliation required' >&2
+   exit "$rc"
+  fi
+  compose "$previous" "$baseline" up -d --no-build workspace || true
+  docker exec agenthub-frontend nginx -s reload || true
+ fi
+ echo 'Release failed; predecessor restart attempted; no database backup was restored over new writes' >&2
+ exit "$rc"
+}
+trap rollback ERR
+stopped=true
+compose "$previous" "$baseline" stop -t 90 workspace
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+backup="$root/backups/full-$previous-$stamp.tar.gz"
+tar -czf "$backup.partial" -C "$volume" .
+tar -tzf "$backup.partial" >/dev/null
+mv "$backup.partial" "$backup"
+sha256sum "$backup" > "$backup.sha256"
+sha256sum -c "$backup.sha256"
+# The predecessor image and full data snapshot remain in place.
+maintenance="$root/backups/worker-$previous-$target-$stamp"
+mkdir -m 700 "$maintenance"
+chown 1000:1000 "$maintenance"
+migration_attempted=true
+offline_migration apply
+compose "$target" "$release" up -d --no-build workspace
+state=starting
+for ((i=0;i<120;i++)); do
+ state=$(docker inspect synplex-full-workspace-1 --format '{{.State.Health.Status}}')
+ [[ $state != healthy ]] || break
+ [[ $state != unhealthy ]] || false
+ sleep 2
+done
+[[ $state == healthy ]]
+docker exec agenthub-frontend nginx -t
+docker exec agenthub-frontend nginx -s reload
+python3 "$release/deploy/verify-release.py" "$SYNPLEX_HEALTH_NETRC" "$SYNPLEX_PUBLIC_ORIGIN" "$target"
+sed -i "s/^SYNPLEX_IMAGE_TAG=.*/SYNPLEX_IMAGE_TAG=$target/" "$config"
+printf '%s\n' "$target" > "$root/active-release.new"
+mv "$root/active-release.new" "$root/active-release"
+trap - ERR
+echo "FULL_RELEASE_VERIFIED $target backup=$backup"
