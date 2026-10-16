@@ -25,7 +25,7 @@ try{
   if(!lost){lost=true;await route.fetch();await app.service.idle();await route.abort('failed');}
   else await route.continue();
  });
- await page.goto(url);await page.locator('nav [data-nav=materials]').click();await page.locator('[data-obsidian-open]').click();const dialog=page.locator('#dialog');await dialog.locator('#vault-folder').setInputFiles(vault);
+ await page.goto(url);await page.locator('nav [data-nav=materials]').click();await page.locator('[data-ai-id=import-obsidian]').click();const dialog=page.locator('#dialog');await dialog.locator('#vault-folder').setInputFiles(vault);
  assert.equal(await dialog.locator('[name=vault-note]').count(),3);assert.match(await dialog.locator('#vault-status').innerText(),/未列入/);
  for(const path of ['起点.md','阶段/转折.md'])await dialog.getByLabel(path,{exact:false}).check();
  await dialog.locator('#vault-import').click();await dialog.locator('#vault-error').filter({hasText:/\S/}).waitFor();
@@ -47,7 +47,7 @@ try{
  const scoped=await repository.forScope(auth,scope),locked=await ingestion.importSource(scoped,{bytes:readFileSync(join(vault,'起点.md')),format:'text/markdown',sourceSystem:'obsidian-markdown',formatVersion:'1',sessionId:changed.sessionId,eventId:'locked-original',occurredAt:null,importOrigin:'user_upload'},{requestId:'locked-original',expectedStateRevision:(await scoped.getState()).stateRevision});
  assert.ok(locked.warnings.some(w=>w.code==='conflict'),'automatic candidate extraction respects source lock');assert.equal(repository.recordCount(auth,scope,'claim'),before);
  assert.equal(repository.recordCount(auth,scope,'source'),2);assert.equal(repository.recordCount(auth,scope,'attempt'),0);
- await dialog.locator('#close-dialog').click();await page.setViewportSize({width:390,height:844});await page.locator('[data-obsidian-open]').click();await dialog.locator('#vault-files').setInputFiles(join(vault,'起点.md'));assert.equal(await dialog.locator('[name=vault-note]').count(),1);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await dialog.locator('#close-dialog').click();await page.setViewportSize({width:390,height:844});await page.locator('[data-ai-id=import-obsidian]').click();await dialog.locator('#vault-files').setInputFiles(join(vault,'起点.md'));assert.equal(await dialog.locator('[name=vault-note]').count(),1);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  assert.deepEqual(await page.evaluate(async()=>{const {availableOperations}=await import('/semantic-actions.js');availableOperations();return [...document.querySelectorAll('[data-ai-state=ambiguous]')].map(e=>e.dataset.aiId);}),[]);
  await page.screenshot({path:join(evidence,'选择笔记-手机.png'),fullPage:true});assert.deepEqual(errors,[]);
  writeFileSync(join(evidence,'result.json'),JSON.stringify({checks:['actual folder picker selection and exact CRLF original bytes','only selected notes uploaded; hidden settings excluded','lost reply reconciles original request without duplicate records; unchanged import skips','wikilink alias and markdown relative link retained; target and missing explained','code fences, dangerous protocols, duplicate basename handling','changed locked note rejected server-side; candidate lock respected','project isolation and stable semantic controls; mobile overflow','source vault unchanged'],uploads:uploads.length,modelCalls:0},null,2));console.log('笔记选择、精确原文、双链、丢失回执续接、编辑锁和项目边界浏览器验收通过；模型调用0。');
